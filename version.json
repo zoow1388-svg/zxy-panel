@@ -1,17 +1,16 @@
 {
   "latest": "0.7.5.1-update-config-agent-xray",
+  "version": "0.7.5.1-update-config-agent-xray",
   "package": "zxy-panel-v0.7.5.1-update-config.zip",
-  "version": "0.7.5.1",
-  "codename": "update-config",
   "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.1/zxy-panel-v0.7.5.1-update-config.zip",
-  "sha256": "4BA3143AF4BBAD081447BF46DE65292C073D4739001DA50FE8A3E11CF93F3C73",
-  "min_supported_version": "0.7.4",
+  "sha256": "174f998ecb292d6eb29ac500fbd96f83ac5866f5077ca4359c832d2856a37a39",
+  "min_supported_version": "0.7.4.3",
   "release_date": "2026-06-28",
   "changelog": [
-    "修复系统升级页默认错误远程版本清单地址问题",
-    "未配置远程版本清单时显示未配置",
+    "修复系统升级页默认使用未发布仓库地址的问题",
+    "未配置远程版本清单时显示明确提示，不再展示假的 raw.githubusercontent 地址",
     "网络核心版本优先读取 Agent 上报的 Xray 版本",
-    "保留固定出口客户和直连客户逻辑",
-    "保留 SOCKS5 路由中转和客户专属固定出口能力"
+    "保留 V0.7.4.3 已验证的直连客户、固定出口客户、SOCKS5 路由中转能力",
+    "清理发布包中的 node_modules、dist、tsbuildinfo 和测试 IP 示例"
   ]
 }

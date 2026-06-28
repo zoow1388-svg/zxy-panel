@@ -1,18 +1,16 @@
 {
-  "latest": "0.7.5.2-install-optimized-agent-xray",
-  "version": "0.7.5.2",
-  "codename": "install-optimized",
-  "package": "zxy-panel-v0.7.5.2-install-optimized.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.2/zxy-panel-v0.7.5.2-install-optimized.zip",
-  "sha256": "3efcf5479c44afb80610f3af57ebc4d00450a8143083bb7096ba71fd7adf1d5b",
+  "latest": "0.7.5.3-ca-cert-fix-agent-xray",
+  "version": "0.7.5.3",
+  "codename": "ca-cert-fix",
+  "package": "zxy-panel-v0.7.5.3-ca-cert-fix.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.3/zxy-panel-v0.7.5.3-ca-cert-fix.zip",
+  "sha256": "2fc95254b29c8d9f4a71ab219f5531243f938bac1fcc4441087175e5de9e87e1",
   "min_supported_version": "0.7.4",
   "release_date": "2026-06-28",
   "changelog": [
-    "优化 GitHub 一键安装脚本，减少重复 apt update 和重复依赖安装",
-    "修复安装完成输出地址缺少 WebBasePath 的问题",
-    "修复一键安装后系统升级页未自动写入 ZXY_UPDATE_MANIFEST_URL 的问题",
-    "兼容 ZIP 包根目录和嵌套目录两种结构，自动查找 deploy/install.sh",
-    "优化 docker-compose-plugin 缺失时的降级提示，自动回退到 docker-compose v1",
-    "保留 V0.7.5.1 已验证的系统升级配置、直连客户、固定出口客户和 SOCKS5 路由中转能力"
+    "修复后端 API 容器缺少 ca-certificates 导致系统升级页无法通过 HTTPS 读取 GitHub raw version.json 的问题",
+    "backend/Dockerfile 增加 ca-certificates 和 update-ca-certificates",
+    "检查更新失败时返回更具体的错误信息，便于区分 DNS、TLS、HTTP 状态码和 JSON 解析问题",
+    "保留 V0.7.5.2 的一键安装速度优化、完整访问地址输出、ZXY_UPDATE_MANIFEST_URL 自动写入、嵌套目录兼容和 docker-compose 回退逻辑"
   ]
 }

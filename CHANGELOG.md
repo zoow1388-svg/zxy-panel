@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## V0.7.5.3 ca-cert-fix
+
+- 修复后端 API 容器缺少 ca-certificates 导致系统升级页无法通过 HTTPS 读取 GitHub raw `version.json` 的问题。
+- `backend/Dockerfile` 增加 ca-certificates 和 update-ca-certificates。
+- 检查更新失败时返回更具体的错误信息，便于区分 DNS、TLS、HTTP 状态码和 JSON 解析问题。
+- 保留 V0.7.5.2 的一键安装速度优化、完整访问地址输出、`ZXY_UPDATE_MANIFEST_URL` 自动写入和 docker-compose 回退逻辑。
+
 ## V0.7.5.2 install-optimized
 
 - 优化一键安装速度，减少重复依赖安装和重复更新软件源。

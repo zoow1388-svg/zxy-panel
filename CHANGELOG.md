@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## V0.7.5.4 dns-stability
+
+- 增强服务端 Xray DNS 稳定策略，固定 `1.1.1.1` / `8.8.8.8` / `9.9.9.9`。
+- 启用 UseIPv4，禁用 DNS fallback。
+- 增加 53 端口 DNS 请求阻断和常见中国公共 DNS IP 阻断。
+- 减少 DNS 泄漏和 DNS 检测漂移。
+- 保留 V0.7.5.3 的 CA 证书修复和 V0.7.5.2 的安装优化。
+
 ## V0.7.5.3 ca-cert-fix
 
 - 修复后端 API 容器缺少 ca-certificates 导致系统升级页无法通过 HTTPS 读取 GitHub raw `version.json` 的问题。

@@ -1,16 +1,17 @@
 {
-  "latest": "0.7.5.3-ca-cert-fix-agent-xray",
-  "version": "0.7.5.3",
-  "codename": "ca-cert-fix",
-  "package": "zxy-panel-v0.7.5.3-ca-cert-fix.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.3/zxy-panel-v0.7.5.3-ca-cert-fix.zip",
-  "sha256": "2fc95254b29c8d9f4a71ab219f5531243f938bac1fcc4441087175e5de9e87e1",
+  "latest": "0.7.5.4-dns-stability-agent-xray",
+  "version": "0.7.5.4",
+  "codename": "dns-stability",
+  "package": "zxy-panel-v0.7.5.4-dns-stability.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.4/zxy-panel-v0.7.5.4-dns-stability.zip",
+  "sha256": "9a2c7bde34125916d566f557e40f94214f6ea984eb0ef89f37275f035d4b17d1",
   "min_supported_version": "0.7.4",
   "release_date": "2026-06-28",
   "changelog": [
-    "修复后端 API 容器缺少 ca-certificates 导致系统升级页无法通过 HTTPS 读取 GitHub raw version.json 的问题",
-    "backend/Dockerfile 增加 ca-certificates 和 update-ca-certificates",
-    "检查更新失败时返回更具体的错误信息，便于区分 DNS、TLS、HTTP 状态码和 JSON 解析问题",
-    "保留 V0.7.5.2 的一键安装速度优化、完整访问地址输出、ZXY_UPDATE_MANIFEST_URL 自动写入、嵌套目录兼容和 docker-compose 回退逻辑"
+    "增强服务端 Xray DNS 稳定策略：固定公共 DNS、UseIPv4、禁用 fallback",
+    "新增 DNS 旁路阻断规则：阻断转发的 53 端口 DNS 请求和常见中国公共 DNS IP",
+    "Clash Meta / sing-box 分享配置增加 9.9.9.9，并保持 IPv4 优先",
+    "系统检测增强 DNS 检查项，识别禁用 fallback 与 DNS 阻断规则",
+    "保留 V0.7.5.3 的 CA 证书修复和 V0.7.5.2 的安装优化"
   ]
 }

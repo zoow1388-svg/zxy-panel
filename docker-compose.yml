@@ -1,0 +1,35 @@
+services:
+  zxy-panel-api:
+    build:
+      context: ./backend
+    container_name: zxy-panel-api
+    ports:
+      - "127.0.0.1:${API_PORT:-8088}:8088"
+    environment:
+      - ZXY_API_ADDR=0.0.0.0:8088
+      - ZXY_JWT_SECRET=${ZXY_JWT_SECRET:-change-me-please}
+      - ZXY_AGENT_SHARED_SECRET=${ZXY_AGENT_SHARED_SECRET:-change-agent-secret}
+      - ZXY_ADMIN_USERNAME=${ZXY_ADMIN_USERNAME:-admin}
+      - ZXY_ADMIN_PASSWORD=${ZXY_ADMIN_PASSWORD:-admin123}
+      - ZXY_DB_PATH=/app/data/zxy-panel.json
+      - ZXY_LOCAL_SERVER_IP=${ZXY_LOCAL_SERVER_IP:-127.0.0.1}
+      - ZXY_LOCAL_SERVER_HOST=${ZXY_LOCAL_SERVER_HOST:-127.0.0.1}
+      - ZXY_LOCAL_SERVER_NAME=${ZXY_LOCAL_SERVER_NAME:-本机服务器}
+      - ZXY_LOCAL_SERVER_REGION=${ZXY_LOCAL_SERVER_REGION:-Local}
+      - ZXY_LOCAL_SERVER_PROVIDER=${ZXY_LOCAL_SERVER_PROVIDER:-Self-hosted}
+      - ZXY_UPDATE_MANIFEST_URL=${ZXY_UPDATE_MANIFEST_URL:-}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  zxy-panel-frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_BASE_PATH: "/${WEB_BASE_PATH:-zxy}/"
+    container_name: zxy-panel-frontend
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
+    depends_on:
+      - zxy-panel-api
+    restart: unless-stopped

@@ -1,0 +1,49 @@
+# Runtime and local environment
+.codex-release-inspect/
+.env
+.env.*
+!.env.example
+!example.env
+panel.info
+*.panel.info
+!example.panel.info
+
+# Secrets and private keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.kdbx
+
+# Production data
+data/
+runtime/
+logs/
+*.log
+zxy-panel.json
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+coverage/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+
+# Release packages
+*.zip
+!releases/**/*.zip
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

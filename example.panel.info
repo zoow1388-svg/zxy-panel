@@ -1,0 +1,8 @@
+# Example only. Do not commit the real /etc/zxy-panel/panel.info file.
+
+PANEL_URL=http://SERVER_PUBLIC_IP:2053
+PANEL_PORT=2053
+ADMIN_USER=admin
+ADMIN_PASSWORD=change-me
+INSTALL_DIR=/opt/zxy-panel
+UPDATE_MANIFEST_URL=https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json

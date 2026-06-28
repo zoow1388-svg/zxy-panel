@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="/etc/zxy-panel"
+PANEL_INFO="${CONFIG_DIR}/panel.info"
+APP_DIR="/opt/zxy-panel"
+
+get_info() {
+  local key="$1"
+  if [[ -f "$PANEL_INFO" ]]; then
+    grep -E "^${key}=" "$PANEL_INFO" | head -n1 | cut -d= -f2- || true
+  fi
+}
+
+compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    echo "docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose"
+  else
+    echo ""
+  fi
+}
+
+case "${1:-}" in
+  info)
+    if [[ ! -f "$PANEL_INFO" ]]; then
+      echo "ZXY Panel info not found."
+      exit 1
+    fi
+    USERNAME=$(get_info USERNAME)
+    PASSWORD=$(get_info PASSWORD)
+    PORT=$(get_info PORT)
+    WEB_BASE_PATH=$(get_info WEB_BASE_PATH)
+    ACCESS_URL=$(get_info ACCESS_URL)
+    DATABASE=$(get_info DATABASE)
+    VERSION=$(get_info VERSION)
+    echo "ZXY Panel Info"
+    echo "=============================="
+    printf "%-12s %s\n" "Version:" "${VERSION:-unknown}"
+    printf "%-12s %s\n" "Username:" "${USERNAME:-unknown}"
+    printf "%-12s %s\n" "Password:" "${PASSWORD:-unknown}"
+    printf "%-12s %s\n" "Port:" "${PORT:-unknown}"
+    printf "%-12s %s\n" "WebPath:" "${WEB_BASE_PATH:-unknown}"
+    printf "%-12s %s\n" "Database:" "${DATABASE:-unknown}"
+    printf "%-12s %s\n" "Access URL:" "${ACCESS_URL:-unknown}"
+    echo
+    echo "Reminder: open the panel port and every node inbound port in your cloud firewall/security group."
+    ;;
+
+  status)
+    COMPOSE=$(compose_cmd)
+    if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
+      cd "$APP_DIR"
+      $COMPOSE ps || true
+      echo
+      systemctl status zxy-agent --no-pager -l 2>/dev/null || true
+      systemctl status nginx --no-pager -l 2>/dev/null || true
+    else
+      echo "Docker Compose not found or app dir missing."
+    fi
+    ;;
+
+  restart)
+    COMPOSE=$(compose_cmd)
+    if [[ -z "$COMPOSE" ]]; then
+      echo "docker compose not found"
+      exit 1
+    fi
+    cd "$APP_DIR"
+    $COMPOSE restart
+    systemctl restart zxy-agent 2>/dev/null || true
+    systemctl restart nginx 2>/dev/null || true
+    echo "ZXY Panel restarted."
+    ;;
+
+  logs)
+    COMPOSE=$(compose_cmd)
+    cd "$APP_DIR"
+    $COMPOSE logs --tail=120 -f
+    ;;
+
+  reset-password)
+    if [[ ! -f "$PANEL_INFO" ]]; then
+      echo "ZXY Panel info not found."
+      exit 1
+    fi
+    DB_PATH="$APP_DIR/data/zxy-panel.json"
+    if [[ ! -f "$DB_PATH" ]]; then
+      echo "Database not found: $DB_PATH"
+      exit 1
+    fi
+    NEW_PASSWORD=$(python3 - <<'PY_RANDOM'
+import secrets, string
+alphabet = string.ascii_letters + string.digits
+print(''.join(secrets.choice(alphabet) for _ in range(12)), end='')
+PY_RANDOM
+)
+    NEW_USERNAME="admin"
+    python3 - "$DB_PATH" "$NEW_USERNAME" "$NEW_PASSWORD" <<'PY'
+import base64, hashlib, json, os, sys
+path, username, password = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding='utf-8') as f:
+    data=json.load(f)
+admins=data.get('admins') or {}
+if not admins:
+    raise SystemExit('no admin users found')
+first_key=next(iter(admins))
+admin=admins[first_key]
+admin['username']=username
+salt=os.urandom(16)
+dk=hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 120000, dklen=32)
+admin['password_hash']='pbkdf2-sha256$120000$%s$%s' % (
+    base64.b64encode(salt).decode().rstrip('='),
+    base64.b64encode(dk).decode().rstrip('='),
+)
+admin['enabled']=True
+admins[first_key]=admin
+data['admins']=admins
+tmp=path+'.tmp'
+with open(tmp,'w',encoding='utf-8') as f:
+    json.dump(data,f,ensure_ascii=False,indent=2)
+os.replace(tmp,path)
+PY
+    sed -i -E "s/^USERNAME=.*/USERNAME=${NEW_USERNAME}/" "$PANEL_INFO"
+    sed -i -E "s/^PASSWORD=.*/PASSWORD=${NEW_PASSWORD}/" "$PANEL_INFO"
+    COMPOSE=$(compose_cmd)
+    cd "$APP_DIR"
+    $COMPOSE restart zxy-panel-api >/dev/null
+    echo "Password reset successfully."
+    echo "Username: ${NEW_USERNAME}"
+    echo "Password: ${NEW_PASSWORD}"
+    ;;
+
+  update)
+    MANIFEST_URL="${ZXY_UPDATE_MANIFEST_URL:-https://raw.githubusercontent.com/zxy-panel/zxy-panel/main/version.json}"
+    echo "ZXY Panel Update Helper"
+    echo "Manifest: ${MANIFEST_URL}"
+    echo
+    echo "This helper checks the remote version manifest. The web panel also provides: 系统升级 -> 检查更新。"
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "python3 not found. Please use the web panel or install python3."
+      exit 1
+    fi
+    python3 - "$MANIFEST_URL" <<'PY_UPDATE'
+import json, sys, urllib.request
+url=sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=8) as r:
+        data=json.loads(r.read().decode())
+except Exception as e:
+    print('Failed to fetch manifest:', e)
+    sys.exit(1)
+latest=data.get('latest') or data.get('version') or '-'
+pkg=data.get('package') or '-'
+dl=data.get('download_url') or '-'
+sha=data.get('sha256') or ''
+print('Latest:', latest)
+print('Package:', pkg)
+print('Download:', dl)
+if sha:
+    print('SHA256:', sha)
+print('
+Copy this command to upgrade after confirming the package:')
+print('cd /root && mkdir -p zxy-panel-upgrades && cd zxy-panel-upgrades && curl -L --fail -o %s %s && unzip -o %s && cd %s && bash deploy/install.sh 2>&1 | tee /root/zxy-panel-upgrade.log' % (pkg, dl, pkg, pkg[:-4] if pkg.endswith('.zip') else pkg))
+PY_UPDATE
+    ;;
+
+  uninstall)
+    COMPOSE=$(compose_cmd)
+    if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
+      cd "$APP_DIR"
+      $COMPOSE down || true
+    fi
+    systemctl stop zxy-agent 2>/dev/null || true
+    systemctl disable zxy-agent 2>/dev/null || true
+    rm -f /etc/systemd/system/zxy-agent.service
+    rm -f /etc/nginx/conf.d/zxy-panel.conf
+    rm -f /usr/local/bin/zxy-panel
+    systemctl daemon-reload || true
+    systemctl restart nginx 2>/dev/null || true
+    echo "ZXY Panel uninstalled."
+    echo "Program directory kept: $APP_DIR"
+    echo "Config directory kept:  $CONFIG_DIR"
+    ;;
+
+  *)
+    echo "ZXY Panel CLI"
+    echo
+    echo "Usage:"
+    echo "  zxy-panel info"
+    echo "  zxy-panel status"
+    echo "  zxy-panel restart"
+    echo "  zxy-panel logs"
+    echo "  zxy-panel reset-password"
+    echo "  zxy-panel update"
+    echo "  zxy-panel uninstall"
+    ;;
+esac

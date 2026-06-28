@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## V0.7.5.2 install-optimized
+
+- 优化一键安装速度，减少重复依赖安装和重复更新软件源。
+- 修复安装完成后访问地址缺少 WebBasePath 的问题。
+- 自动写入 `ZXY_UPDATE_MANIFEST_URL`，系统升级页不再显示远程版本清单未配置。
+- 优化 docker-compose 兼容和安装提示。
+- 保留 V0.7.5.1 已验证的系统升级配置、直连客户、固定出口客户和 SOCKS5 路由中转能力。
+
 ## V0.7.5.1 update-config
 
 - 修复默认 `version.json` 地址写死问题。

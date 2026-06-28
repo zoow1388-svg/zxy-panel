@@ -130,15 +130,15 @@ extract_release() {
   log "解压到：${RELEASE_ROOT}"
   unzip -q -o "${PACKAGE_FILE}" -d "${RELEASE_ROOT}"
 
-  if [ -x "${RELEASE_ROOT}/deploy/install.sh" ]; then
+  if [ -f "${RELEASE_ROOT}/deploy/install.sh" ]; then
     RELEASE_DIR="${RELEASE_ROOT}"
     return
   fi
 
-  local nested_dir
-  nested_dir="$(find "${RELEASE_ROOT}" -mindepth 2 -maxdepth 2 -type f -path '*/deploy/install.sh' -print -quit | xargs -r dirname | xargs -r dirname)"
-  if [ -n "${nested_dir}" ] && [ -x "${nested_dir}/deploy/install.sh" ]; then
-    RELEASE_DIR="${nested_dir}"
+  local deploy_install
+  deploy_install="$(find "${RELEASE_ROOT}" -type f -path '*/deploy/install.sh' -print -quit)"
+  if [ -n "${deploy_install}" ]; then
+    RELEASE_DIR="$(cd "$(dirname "${deploy_install}")/.." && pwd)"
     return
   fi
 

@@ -11,10 +11,12 @@ import (
 
 	"zxy-panel/backend/internal/model"
 	"zxy-panel/backend/internal/security"
+	appversion "zxy-panel/backend/internal/version"
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.5.5-network-policy-center-agent-xray"
+var panelVersion = appversion.Version
+
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {

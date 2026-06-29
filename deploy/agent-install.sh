@@ -11,31 +11,75 @@ XRAY_RELOAD_CMD="${XRAY_RELOAD_CMD:-systemctl restart xray}"
 INSTALL_XRAY="${INSTALL_XRAY:-true}"
 SETUP_XRAY_SERVICE="${SETUP_XRAY_SERVICE:-true}"
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DST="/usr/local/bin/zxy-agent"
+
 if [[ -z "$SERVER_ID" || -z "$AGENT_TOKEN" ]]; then
   echo "ERROR: SERVER_ID and AGENT_TOKEN are required."
   echo "Example: PANEL_BASE='http://1.2.3.4:8088' SERVER_ID='srv_xxx' AGENT_TOKEN='token' ./deploy/agent-install.sh"
   exit 1
 fi
 
+install_local_xray_if_available() {
+  local xray_src=""
+  if [[ -x "$ROOT_DIR/bin/xray-linux-amd64" ]]; then
+    xray_src="$ROOT_DIR/bin/xray-linux-amd64"
+  elif [[ -x "$ROOT_DIR/bin/xray" ]]; then
+    xray_src="$ROOT_DIR/bin/xray"
+  fi
+
+  if [[ -z "$xray_src" ]]; then
+    return 1
+  fi
+
+  echo "Installing bundled Xray-core: $xray_src"
+  install -m 0755 "$xray_src" /usr/local/bin/xray
+  mkdir -p /usr/local/share/xray /usr/local/etc/xray /var/log/xray /etc/zxy-panel/xray
+
+  if [[ -f "$ROOT_DIR/bin/geoip.dat" ]]; then
+    install -m 0644 "$ROOT_DIR/bin/geoip.dat" /usr/local/share/xray/geoip.dat
+  fi
+  if [[ -f "$ROOT_DIR/bin/geosite.dat" ]]; then
+    install -m 0644 "$ROOT_DIR/bin/geosite.dat" /usr/local/share/xray/geosite.dat
+  fi
+  if [[ ! -f /usr/local/etc/xray/config.json ]]; then
+    cat > /usr/local/etc/xray/config.json <<'JSON'
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [],
+  "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
+}
+JSON
+  fi
+  return 0
+}
+
 if [[ "${INSTALL_XRAY}" == "true" ]]; then
-  if ! command -v xray >/dev/null 2>&1; then
+  if command -v xray >/dev/null 2>&1; then
+    echo "Xray-core already installed: $(xray version | head -1)"
+  elif install_local_xray_if_available; then
+    echo "Bundled Xray-core installed: $(xray version | head -1)"
+  else
     echo "Installing Xray-core using the official community install script..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-  else
-    echo "Xray-core already installed: $(xray version | head -1)"
   fi
 fi
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN_SRC="$ROOT_DIR/bin/zxy-agent-linux-amd64"
-BIN_DST="/usr/local/bin/zxy-agent"
+BIN_SRC=""
+if [[ -x "$ROOT_DIR/bin/zxy-agent-linux-amd64" ]]; then
+  BIN_SRC="$ROOT_DIR/bin/zxy-agent-linux-amd64"
+elif [[ -x "$ROOT_DIR/bin/zxy-agent" ]]; then
+  BIN_SRC="$ROOT_DIR/bin/zxy-agent"
+fi
 
-if [[ ! -x "$BIN_SRC" ]]; then
+if [[ -z "$BIN_SRC" ]]; then
   echo "Agent binary not found, trying to build from source..."
   if ! command -v go >/dev/null 2>&1; then
     echo "ERROR: Go is not installed and prebuilt binary is missing."
     exit 1
   fi
+  BIN_SRC="$ROOT_DIR/bin/zxy-agent-linux-amd64"
+  mkdir -p "$ROOT_DIR/bin"
   (cd "$ROOT_DIR/agent" && go build -o "$BIN_SRC" ./cmd/agent)
 fi
 
@@ -57,13 +101,13 @@ if [[ "${SETUP_XRAY_SERVICE}" == "true" ]]; then
   XRAY_BIN="$(command -v xray || true)"
   if [[ -n "$XRAY_BIN" ]]; then
     mkdir -p /etc/systemd/system/xray.service.d
-    cat > /etc/systemd/system/xray.service.d/99-zxy-panel.conf <<EOF
+    cat > /etc/systemd/system/xray.service.d/99-zxy-panel.conf <<EOF_SERVICE
 [Service]
 User=root
 Group=root
 ExecStart=
 ExecStart=$XRAY_BIN run -config ${XRAY_CONFIG}
-EOF
+EOF_SERVICE
     systemctl daemon-reload
   fi
 fi

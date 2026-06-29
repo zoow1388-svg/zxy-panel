@@ -12,12 +12,12 @@ import (
 
 // GenerateInboundConfig 生成单个 inbound 配置片段，供面板预览使用。
 func GenerateInboundConfig(node model.Node, clients []model.Client) map[string]any {
-	return GenerateServerConfig([]model.Node{node}, clients, nil, nil)
+	return GenerateServerConfig([]model.Node{node}, clients, nil, nil, model.NetworkPolicy{})
 }
 
 // GenerateServerConfig 根据某台服务器下的节点和客户绑定关系生成完整 Xray 配置。
 // V0.5.8 默认加入 DNS 防泄漏、sniffing 和 freedom outbound domainStrategy，避免客户端全局代理下仍出现本地 DNS 泄漏。
-func GenerateServerConfig(nodes []model.Node, clients []model.Client, relayRoutes []model.RelayRoute, allNodes map[string]model.Node) map[string]any {
+func GenerateServerConfig(nodes []model.Node, clients []model.Client, relayRoutes []model.RelayRoute, allNodes map[string]model.Node, policy model.NetworkPolicy) map[string]any {
 	inbounds := make([]any, 0)
 	outbounds := []any{
 		map[string]any{
@@ -210,16 +210,17 @@ func GenerateServerConfig(nodes []model.Node, clients []model.Client, relayRoute
 			})
 		}
 	}
-	return map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
-		"dns": map[string]any{
-			"servers":       []any{"1.1.1.1", "8.8.8.8", "9.9.9.9"},
-			"queryStrategy": "UseIPv4",
-		},
+	applyNetworkPolicy(&rules, policy)
+	cfg := map[string]any{
+		"log":       map[string]any{"loglevel": "warning"},
 		"inbounds":  inbounds,
 		"outbounds": outbounds,
 		"routing":   map[string]any{"domainStrategy": "IPIfNonMatch", "rules": rules},
 	}
+	if dns := dnsConfigFromPolicy(policy); len(dns) > 0 {
+		cfg["dns"] = dns
+	}
+	return cfg
 }
 
 func makeRelayVlessClients(clients []model.Client, relayID string) []map[string]any {
@@ -302,4 +303,112 @@ func trimSlash(s string) string {
 		return "zxy"
 	}
 	return s
+}
+
+func dnsConfigFromPolicy(policy model.NetworkPolicy) map[string]any {
+	policy = normalizeNetworkPolicy(policy)
+	dns := map[string]any{}
+	if policy.PublicDNS || len(policy.DNSServers) > 0 {
+		servers := []any{}
+		for _, s := range policy.DNSServers {
+			if s != "" {
+				servers = append(servers, s)
+			}
+		}
+		if len(servers) > 0 {
+			dns["servers"] = servers
+		}
+	}
+	if policy.QueryStrategy != "" && policy.QueryStrategy != "AsIs" {
+		dns["queryStrategy"] = policy.QueryStrategy
+	}
+	if policy.DisableFallback {
+		dns["disableFallback"] = true
+	}
+	if policy.DisableFallbackIfMatch {
+		dns["disableFallbackIfMatch"] = true
+	}
+	return dns
+}
+
+func applyNetworkPolicy(rules *[]any, policy model.NetworkPolicy) {
+	policy = normalizeNetworkPolicy(policy)
+	if policy.BlockDNS53 {
+		*rules = append(*rules, map[string]any{
+			"type":        "field",
+			"port":        "53",
+			"network":     "tcp,udp",
+			"outboundTag": "blocked",
+		})
+	}
+	if policy.BlockChinaDNS {
+		*rules = append(*rules, map[string]any{
+			"type": "field",
+			"ip": []any{
+				"114.114.114.114", "114.114.115.115", "223.5.5.5", "223.6.6.6",
+				"119.29.29.29", "180.76.76.76", "1.2.4.8", "210.2.4.8",
+			},
+			"outboundTag": "blocked",
+		})
+	}
+	if policy.BlockQUIC {
+		*rules = append(*rules, map[string]any{
+			"type":        "field",
+			"port":        "443",
+			"network":     "udp",
+			"outboundTag": "blocked",
+		})
+	}
+}
+
+func normalizeNetworkPolicy(policy model.NetworkPolicy) model.NetworkPolicy {
+	mode := policy.Mode
+	if mode == "" {
+		mode = "compat"
+	}
+	policy.Mode = mode
+	switch mode {
+	case "compat":
+		policy.PublicDNS = true
+		policy.DNSServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+		policy.QueryStrategy = "UseIPv4"
+		policy.DisableFallback = false
+		policy.DisableFallbackIfMatch = false
+		policy.BlockDNS53 = false
+		policy.BlockChinaDNS = false
+		policy.BlockQUIC = false
+	case "public_dns", "dns_leak_guard":
+		policy.PublicDNS = true
+		if len(policy.DNSServers) == 0 {
+			policy.DNSServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+		}
+		policy.QueryStrategy = "UseIPv4"
+		policy.DisableFallback = false
+		policy.DisableFallbackIfMatch = false
+		policy.BlockDNS53 = false
+		policy.BlockChinaDNS = false
+		policy.BlockQUIC = false
+	case "strict":
+		policy.PublicDNS = true
+		if len(policy.DNSServers) == 0 {
+			policy.DNSServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+		}
+		policy.QueryStrategy = "UseIPv4"
+		policy.DisableFallback = true
+		policy.DisableFallbackIfMatch = true
+		policy.BlockDNS53 = true
+		policy.BlockChinaDNS = true
+		policy.BlockQUIC = true
+	case "custom":
+		if policy.PublicDNS && len(policy.DNSServers) == 0 {
+			policy.DNSServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+		}
+		if policy.QueryStrategy == "" {
+			policy.QueryStrategy = "AsIs"
+		}
+	default:
+		policy.Mode = "compat"
+		return normalizeNetworkPolicy(policy)
+	}
+	return policy
 }

@@ -12,6 +12,7 @@ import Logs from './views/Logs.vue'
 import Settings from './views/Settings.vue'
 import Diagnostics from './views/Diagnostics.vue'
 import Updates from './views/Updates.vue'
+import NetworkPolicy from './views/NetworkPolicy.vue'
 import './style.css'
 import { APP_VERSION } from './version'
 
@@ -35,7 +36,8 @@ const router = createRouter({
     { path: '/logs', component: Logs },
     { path: '/settings', component: Settings },
     { path: '/diagnostics', component: Diagnostics },
-    { path: '/updates', component: Updates }
+    { path: '/updates', component: Updates },
+    { path: '/network-policy', component: NetworkPolicy }
   ]
 })
 

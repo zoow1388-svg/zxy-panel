@@ -1,1 +1,1 @@
-export const APP_VERSION = 'V0.7.5.1 升级配置修复版'
+export const APP_VERSION = 'V0.7.5.5 网络策略中心'

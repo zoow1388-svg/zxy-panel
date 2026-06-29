@@ -22,6 +22,7 @@ const opsNav = [
 ]
 const advancedNav = [
   { to: '/servers', label: '高级：服务器管理', icon: '◇', desc: '多机接入' },
+  { to: '/network-policy', label: '高级：网络策略', icon: '◈', desc: 'DNS / QUIC / IPv6' },
 ]
 
 const dashboard = ref<any>({})

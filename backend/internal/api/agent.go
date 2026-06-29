@@ -79,7 +79,7 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 			clients = append(clients, c)
 		}
 	}
-	cfg := xray.GenerateServerConfig(nodes, clients, relays, r.store.Data.Nodes)
+	cfg := xray.GenerateServerConfig(nodes, clients, relays, r.store.Data.Nodes, r.store.Data.NetworkPolicy)
 	desiredHash := xray.ConfigHash(cfg)
 	server.AgentVersion = body.AgentVersion
 	server.LastSyncAt = time.Now()

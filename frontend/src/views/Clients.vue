@@ -11,6 +11,7 @@ const nodes = ref<any[]>([])
 const relays = ref<any[]>([])
 const exits = ref<any[]>([])
 const servers = ref<any[]>([])
+const networkPolicy = ref<any>({})
 const error = ref('')
 const message = ref('')
 const editingId = ref('')
@@ -64,6 +65,7 @@ async function load() {
   relays.value = await api('/api/relays')
   exits.value = await api('/api/landing-exits')
   servers.value = await api('/api/servers')
+  try { networkPolicy.value = (await api('/api/network-policy')).policy || {} } catch { networkPolicy.value = {} }
   if (!fixedForm.value.relay_server_id && servers.value[0]) fixedForm.value.relay_server_id = servers.value[0].id
   if (!fixedForm.value.landing_exit_id && exits.value[0]) fixedForm.value.landing_exit_id = exits.value[0].id
   fillFixedRelayHost()
@@ -231,9 +233,9 @@ function rebuildClientShare() {
     shareLinks.value = []
     return
   }
-  shareText.value = buildClientMultiShare(available, c, shareTab.value as ShareFormat)
+  shareText.value = buildClientMultiShare(available, c, shareTab.value as ShareFormat, networkPolicy.value)
   shareLinks.value = shareTab.value === 'v2rayn' || shareTab.value === 'shadowrocket'
-    ? available.map((n:any) => ({ node:n, link: buildClientMultiShare([n], c, shareTab.value as ShareFormat) }))
+    ? available.map((n:any) => ({ node:n, link: buildClientMultiShare([n], c, shareTab.value as ShareFormat, networkPolicy.value) }))
     : []
 }
 watch(shareTab, () => rebuildClientShare())
@@ -313,7 +315,7 @@ onMounted(load)
 </script>
 <template>
   <div v-if="copyToast" class="copy-toast">{{ copyToast }}</div>
-  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.1 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.5 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
 
   <div class="client-summary-grid">
     <div class="client-summary-card"><span>客户总数</span><strong>{{ clientStats.total }}</strong></div>

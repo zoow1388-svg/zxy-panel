@@ -321,7 +321,7 @@ onMounted(() => { loadSavedOutlets(); load() })
   <div class="page-head">
     <div>
       <h1 class="page-title">中转管理</h1>
-      <p class="page-desc">V0.7.5.1 中转管理清理版：这里只作为线路运维视图，客户节点统一到客户管理里分享。</p>
+      <p class="page-desc">V0.7.5.5 中转管理清理版：这里只作为线路运维视图，客户节点统一到客户管理里分享。</p>
     </div>
     <div class="head-actions"><button class="btn" @click="showRelayEditor = true">新增中转线路</button></div>
   </div>

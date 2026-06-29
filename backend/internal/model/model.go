@@ -135,6 +135,23 @@ type RelayRoute struct {
 	UpdatedAt              time.Time `json:"updated_at"`
 }
 
+type NetworkPolicy struct {
+	Mode                   string    `json:"mode"`
+	PublicDNS              bool      `json:"public_dns"`
+	DNSServers             []string  `json:"dns_servers"`
+	QueryStrategy          string    `json:"query_strategy"`
+	DisableFallback        bool      `json:"disable_fallback"`
+	DisableFallbackIfMatch bool      `json:"disable_fallback_if_match"`
+	BlockDNS53             bool      `json:"block_dns_53"`
+	BlockChinaDNS          bool      `json:"block_china_dns"`
+	BlockQUIC              bool      `json:"block_quic"`
+	IPv6Strategy           string    `json:"ipv6_strategy"`
+	ClashIncludeQuad9      bool      `json:"clash_include_quad9"`
+	SingBoxIncludeQuad9    bool      `json:"sing_box_include_quad9"`
+	UpdatedAt              time.Time `json:"updated_at"`
+	UpdatedBy              string    `json:"updated_by"`
+}
+
 type OperationLog struct {
 	ID        string    `json:"id"`
 	Actor     string    `json:"actor"`
@@ -175,12 +192,14 @@ type AgentSyncResponse struct {
 }
 
 type PanelData struct {
-	Version       string                  `json:"version"`
-	Admins        map[string]AdminUser    `json:"admins"`
-	Servers       map[string]Server       `json:"servers"`
-	Nodes         map[string]Node         `json:"nodes"`
-	Clients       map[string]Client       `json:"clients"`
-	RelayRoutes   map[string]RelayRoute   `json:"relay_routes"`
-	LandingExits  map[string]LandingExit  `json:"landing_exits"`
-	OperationLogs map[string]OperationLog `json:"operation_logs"`
+	Version             string                  `json:"version"`
+	Admins              map[string]AdminUser    `json:"admins"`
+	Servers             map[string]Server       `json:"servers"`
+	Nodes               map[string]Node         `json:"nodes"`
+	Clients             map[string]Client       `json:"clients"`
+	RelayRoutes         map[string]RelayRoute   `json:"relay_routes"`
+	LandingExits        map[string]LandingExit  `json:"landing_exits"`
+	OperationLogs       map[string]OperationLog `json:"operation_logs"`
+	NetworkPolicy       NetworkPolicy           `json:"network_policy"`
+	NetworkPolicyBackup NetworkPolicy           `json:"network_policy_backup"`
 }

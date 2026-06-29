@@ -75,7 +75,7 @@ func (r *Router) updateCheck(w http.ResponseWriter, req *http.Request) {
 			"current_version": panelVersion,
 			"manifest_url":    manifestURL,
 			"error":           err.Error(),
-			"message":         "暂时无法获取远程版本清单。请确认代码仓库 version.json 已发布，或在环境变量 ZXY_UPDATE_MANIFEST_URL 中配置正确地址。",
+			"message":         "暂时无法获取远程版本清单：" + err.Error(),
 		})
 		return
 	}
@@ -105,7 +105,7 @@ func (r *Router) updatePanelCommand(w http.ResponseWriter, req *http.Request) {
 	}
 	manifest, err := fetchUpdateManifest(req.Context(), manifestURL)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "message": "无法生成升级命令：远程版本清单不可用。"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "message": "无法生成升级命令：远程版本清单不可用：" + err.Error()})
 		return
 	}
 	pkg := strings.TrimSpace(manifest.Package)

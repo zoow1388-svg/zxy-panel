@@ -71,7 +71,7 @@ onMounted(loadStatus)
   <div class="page-head">
     <div>
       <h1 class="page-title">系统升级</h1>
-      <p class="page-desc">V0.7.5.1 升级配置修复版：先确认升级源是否已配置，再检查版本或生成升级命令，避免使用未发布的仓库地址。</p>
+      <p class="page-desc">V0.7.5.5 网络策略中心版：先确认升级源是否已配置，再检查版本或生成升级命令，避免使用未发布的仓库地址。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="loadStatus">刷新状态</button>

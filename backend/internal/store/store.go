@@ -77,7 +77,7 @@ func (s *Store) loadOrInit() error {
 
 func newData() model.PanelData {
 	return model.PanelData{
-		Version:       "0.7.5.1-update-config-agent-xray",
+		Version:       "0.7.5.5-network-policy-center-agent-xray",
 		Admins:        map[string]model.AdminUser{},
 		Servers:       map[string]model.Server{},
 		Nodes:         map[string]model.Node{},
@@ -110,6 +110,8 @@ func normalize(d *model.PanelData) {
 	if d.OperationLogs == nil {
 		d.OperationLogs = map[string]model.OperationLog{}
 	}
+	normalizeNetworkPolicy(&d.NetworkPolicy)
+	normalizeNetworkPolicy(&d.NetworkPolicyBackup)
 	// V0.4.1 修复：旧版本 AdminUser.PasswordHash 被 json:"-" 忽略，重启后会丢失密码哈希，导致 admin/admin123 无法登录。
 	// 如果发现管理员哈希为空，自动重置为默认密码 admin123，方便测试版升级恢复登录。
 	for id, a := range d.Admins {
@@ -122,7 +124,52 @@ func normalize(d *model.PanelData) {
 			}
 		}
 	}
-	d.Version = "0.7.5.1-update-config-agent-xray"
+	d.Version = "0.7.5.5-network-policy-center-agent-xray"
+}
+
+func defaultNetworkPolicy() model.NetworkPolicy {
+	return model.NetworkPolicy{
+		Mode:                   "compat",
+		PublicDNS:              false,
+		DNSServers:             []string{},
+		QueryStrategy:          "AsIs",
+		DisableFallback:        false,
+		DisableFallbackIfMatch: false,
+		BlockDNS53:             false,
+		BlockChinaDNS:          false,
+		BlockQUIC:              false,
+		IPv6Strategy:           "keep",
+		ClashIncludeQuad9:      false,
+		SingBoxIncludeQuad9:    false,
+	}
+}
+
+func normalizeNetworkPolicy(p *model.NetworkPolicy) {
+	if p.Mode == "" {
+		*p = defaultNetworkPolicy()
+		return
+	}
+	allowedModes := map[string]bool{"compat": true, "public_dns": true, "dns_leak_guard": true, "strict": true, "custom": true}
+	if !allowedModes[p.Mode] {
+		p.Mode = "compat"
+	}
+	if p.QueryStrategy == "" {
+		p.QueryStrategy = "AsIs"
+	}
+	allowedQuery := map[string]bool{"AsIs": true, "UseIPv4": true, "UseIPv6": true, "UseIP": true}
+	if !allowedQuery[p.QueryStrategy] {
+		p.QueryStrategy = "AsIs"
+	}
+	if p.IPv6Strategy == "" {
+		p.IPv6Strategy = "keep"
+	}
+	allowedIPv6 := map[string]bool{"keep": true, "warn": true, "disable_hint": true}
+	if !allowedIPv6[p.IPv6Strategy] {
+		p.IPv6Strategy = "keep"
+	}
+	if p.PublicDNS && len(p.DNSServers) == 0 {
+		p.DNSServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+	}
 }
 
 func (s *Store) SaveLocked() error {
@@ -261,7 +308,7 @@ func shouldReplaceLocalEndpoint(current, target string) bool {
 func pickLocalServer(list []model.Server) model.Server {
 	keep := list[0]
 	for _, srv := range list[1:] {
-		if srv.AgentVersion == "0.7.5.1-update-config-agent-xray" && keep.AgentVersion != "0.7.5.1-update-config-agent-xray" {
+		if srv.AgentVersion == "0.7.5.5-network-policy-center-agent-xray" && keep.AgentVersion != "0.7.5.5-network-policy-center-agent-xray" {
 			keep = srv
 			continue
 		}

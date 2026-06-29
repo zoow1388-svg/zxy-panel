@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.5.1-update-config-agent-xray"
+const panelVersion = "0.7.5.5-network-policy-center-agent-xray"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {
@@ -389,7 +389,7 @@ func (r *Router) buildSystemChecks() ([]systemCheck, map[string]int) {
 	for _, rr := range r.store.Data.RelayRoutes {
 		relays = append(relays, rr)
 	}
-	desired := xray.GenerateServerConfig(nodes, clients, relays, r.store.Data.Nodes)
+	desired := xray.GenerateServerConfig(nodes, clients, relays, r.store.Data.Nodes, r.store.Data.NetworkPolicy)
 	if len(relaySocksRouteNames) > 0 {
 		missingBindings := socks5RouteBindingProblems(desired, r.store.Data.RelayRoutes)
 		if len(missingBindings) > 0 {
@@ -399,10 +399,16 @@ func (r *Router) buildSystemChecks() ([]systemCheck, map[string]int) {
 		}
 	}
 
+	policy := r.store.Data.NetworkPolicy
 	if hasDNSProtection(desired) {
-		checks = append(checks, systemCheck{Key: "dns_protection", Label: "DNS 防泄漏", Status: "ok", Message: "目标 Xray 配置已包含 1.1.1.1 / 8.8.8.8 / 9.9.9.9 和 UseIPv4。"})
+		checks = append(checks, systemCheck{Key: "dns_protection", Label: "DNS 策略", Status: "ok", Message: "当前网络策略已生成公共 DNS 与 UseIPv4；未强制阻断 53，不会影响主链路速度。"})
 	} else {
-		checks = append(checks, systemCheck{Key: "dns_protection", Label: "DNS 防泄漏", Status: "warn", Message: "目标 Xray 配置缺少 DNS 防泄漏配置。"})
+		checks = append(checks, systemCheck{Key: "dns_protection", Label: "DNS 策略", Status: "warn", Message: "当前策略未启用公共 DNS。若检测到 DNS 漂移，可到 高级：网络策略 手动启用公共 DNS 稳定模式。"})
+	}
+	if policy.BlockDNS53 || policy.BlockQUIC || policy.DisableFallback {
+		checks = append(checks, systemCheck{Key: "network_policy_strict", Label: "网络策略强度", Status: "warn", Message: "当前启用了严格网络策略选项，可能导致部分环境变慢。若出现卡顿，请到 高级：网络策略 切回兼容稳定模式。"})
+	} else {
+		checks = append(checks, systemCheck{Key: "network_policy_safe", Label: "网络策略强度", Status: "ok", Message: "当前未启用 53 端口阻断、QUIC 阻断或禁用 fallback，属于兼容稳定策略。"})
 	}
 	if hasSniffing(desired) {
 		checks = append(checks, systemCheck{Key: "sniffing", Label: "流量嗅探", Status: "ok", Message: "所有目标 inbound 已开启 http/tls/quic sniffing。"})

@@ -55,7 +55,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">系统检测</h1>
-      <p class="page-desc">V0.7.5.1 UI 弹窗优化版：检测多服务器、Agent 版本、中转线路、协议匹配、端口冲突、DNS 与出站策略。</p>
+      <p class="page-desc">V0.7.5.5 网络策略中心版：检测多服务器、Agent 版本、中转线路、协议匹配、端口冲突、DNS 与出站策略。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="makeReport" :disabled="copying">{{ copying ? '生成中...' : '复制诊断报告' }}</button>

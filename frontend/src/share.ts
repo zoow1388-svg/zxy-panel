@@ -168,11 +168,13 @@ function clashProxy(node: any, client: any): string {
   return lines.join('\n')
 }
 
-export function buildClashMetaConfig(nodes: any[], client: any): string {
+export function buildClashMetaConfig(nodes: any[], client: any, policy: any = {}): string {
   const enabled = nodes.filter(Boolean)
   const names = enabled.map(n => safeName(n))
   const proxyList = enabled.map(n => clashProxy(n, client)).join('\n')
   const groupProxies = names.length ? names.map(n => `      - ${yamlQuote(n)}`).join('\n') : '      - DIRECT'
+  const nameservers = ['    - 1.1.1.1', '    - 8.8.8.8']
+  if (policy?.clash_include_quad9) nameservers.push('    - 9.9.9.9')
   return [
     'mixed-port: 7890',
     'allow-lan: false',
@@ -184,8 +186,7 @@ export function buildClashMetaConfig(nodes: any[], client: any): string {
     '  ipv6: false',
     '  enhanced-mode: fake-ip',
     '  nameserver:',
-    '    - 1.1.1.1',
-    '    - 8.8.8.8',
+    ...nameservers,
     'proxies:',
     proxyList || '  []',
     'proxy-groups:',
@@ -232,7 +233,7 @@ function singBoxOutbound(node: any, client: any): any {
   return outbound
 }
 
-export function buildSingBoxConfig(nodes: any[], client: any): string {
+export function buildSingBoxConfig(nodes: any[], client: any, policy: any = {}): string {
   const enabled = nodes.filter(Boolean)
   const outbounds = enabled.map(n => singBoxOutbound(n, client))
   const selector = {
@@ -247,6 +248,7 @@ export function buildSingBoxConfig(nodes: any[], client: any): string {
       servers: [
         { tag: 'cloudflare', address: '1.1.1.1' },
         { tag: 'google', address: '8.8.8.8' },
+        ...(policy?.sing_box_include_quad9 ? [{ tag: 'quad9', address: '9.9.9.9' }] : []),
       ],
       final: 'cloudflare',
       strategy: 'ipv4_only',
@@ -260,17 +262,17 @@ export function buildSingBoxConfig(nodes: any[], client: any): string {
   return JSON.stringify(config, null, 2)
 }
 
-export function buildClientShare(node: any, client: any, format: ShareFormat): string {
+export function buildClientShare(node: any, client: any, format: ShareFormat, policy: any = {}): string {
   if (format === 'shadowrocket') return buildVlessLink(node, client, 'shadowrocket')
-  if (format === 'clash') return buildClashMetaConfig([node], client)
-  if (format === 'singbox') return buildSingBoxConfig([node], client)
+  if (format === 'clash') return buildClashMetaConfig([node], client, policy)
+  if (format === 'singbox') return buildSingBoxConfig([node], client, policy)
   return buildVlessLink(node, client, 'v2rayn')
 }
 
-export function buildClientMultiShare(nodes: any[], client: any, format: ShareFormat): string {
+export function buildClientMultiShare(nodes: any[], client: any, format: ShareFormat, policy: any = {}): string {
   const clientNodes = nodes.filter(isClientShareNode)
-  if (format === 'clash') return buildClashMetaConfig(clientNodes, client)
-  if (format === 'singbox') return buildSingBoxConfig(clientNodes, client)
+  if (format === 'clash') return buildClashMetaConfig(clientNodes, client, policy)
+  if (format === 'singbox') return buildSingBoxConfig(clientNodes, client, policy)
   return clientNodes.map(n => buildVlessLink(n, client, format === 'shadowrocket' ? 'shadowrocket' : 'v2rayn')).join('\n')
 }
 

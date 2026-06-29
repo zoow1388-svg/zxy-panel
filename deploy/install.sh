@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.5.1"
+VERSION="0.7.5.5"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"
@@ -13,6 +13,8 @@ AUTO_AGENT=${AUTO_AGENT:-true}
 INSTALL_XRAY=${INSTALL_XRAY:-true}
 SETUP_XRAY_SERVICE=${SETUP_XRAY_SERVICE:-true}
 FRESH_INSTALL=${FRESH_INSTALL:-false}
+APT_UPDATED=false
+START_TS="$(date +%s)"
 
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -23,6 +25,39 @@ step() {
   echo "======================================"
   echo "$1"
   echo "======================================"
+}
+
+elapsed() {
+  local now
+  now="$(date +%s)"
+  printf '%ss' "$((now - START_TS))"
+}
+
+apt_update_once() {
+  if [[ "$APT_UPDATED" != "true" ]]; then
+    apt-get update
+    APT_UPDATED=true
+  fi
+}
+
+apt_install_missing() {
+  local missing=()
+  local pkg
+  for pkg in "$@"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    echo "Dependencies already installed: $*"
+    return 0
+  fi
+  echo "Installing missing packages: ${missing[*]}"
+  apt_update_once
+  apt-get install -y \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    "${missing[@]}"
 }
 
 random_string() {
@@ -82,14 +117,17 @@ panel_info_value() {
   fi
 }
 
+env_file_value() {
+  local key="$1"
+  if [[ -f "$APP_DIR/.env" ]]; then
+    grep -E "^${key}=" "$APP_DIR/.env" | head -n1 | cut -d= -f2- || true
+  fi
+}
+
 install_base_deps() {
   step "Installing base dependencies"
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get update
-    apt-get install -y \
-      -o Dpkg::Options::="--force-confdef" \
-      -o Dpkg::Options::="--force-confold" \
-      curl ca-certificates nginx python3 rsync iproute2
+    apt_install_missing curl ca-certificates nginx python3 rsync iproute2
   elif command -v yum >/dev/null 2>&1; then
     yum install -y curl ca-certificates nginx python3 rsync iproute
   else
@@ -104,26 +142,40 @@ install_docker_if_missing() {
   if ! command -v docker >/dev/null 2>&1; then
     echo "Docker not found, installing docker.io..."
     if command -v apt-get >/dev/null 2>&1; then
-      apt-get update
-      apt-get install -y docker.io
+      apt_install_missing docker.io
     elif command -v yum >/dev/null 2>&1; then
       yum install -y docker
     else
       echo "ERROR: unsupported system, cannot install Docker automatically."
       exit 1
     fi
+  else
+    echo "Docker already installed: $(docker --version 2>/dev/null || true)"
   fi
 
   systemctl enable docker >/dev/null 2>&1 || true
   systemctl start docker >/dev/null 2>&1 || true
 
-  if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
-    echo "Docker Compose not found, installing compose package..."
-    if command -v apt-get >/dev/null 2>&1; then
-      apt-get install -y docker-compose-plugin || apt-get install -y docker-compose
-    elif command -v yum >/dev/null 2>&1; then
-      yum install -y docker-compose-plugin || yum install -y docker-compose
+  if docker compose version >/dev/null 2>&1; then
+    echo "Docker Compose v2 available: $(docker compose version 2>/dev/null || true)"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    echo "Docker Compose v1 available: $(docker-compose --version 2>/dev/null || true)"
+    return 0
+  fi
+
+  echo "Docker Compose not found, installing compose package..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt_update_once
+    if apt-get install -y docker-compose-plugin; then
+      echo "Docker Compose plugin installed."
+    else
+      echo "docker-compose-plugin not available from current apt sources, fallback to docker-compose v1."
+      apt-get install -y docker-compose
     fi
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y docker-compose-plugin || yum install -y docker-compose
   fi
 }
 
@@ -227,6 +279,7 @@ print_result() {
   echo
   echo "Important: open TCP port ${PANEL_PORT} in your cloud firewall/security group for panel access."
   echo "Important: also open every node inbound port you create, otherwise client tools cannot connect."
+  echo "Install duration: $(elapsed)"
 }
 
 wait_api() {
@@ -315,6 +368,7 @@ EXISTING_WEB_BASE_PATH=""
 EXISTING_USERNAME=""
 EXISTING_PASSWORD=""
 EXISTING_AGENT_SECRET=""
+EXISTING_MANIFEST_URL=""
 if [[ "$FRESH_INSTALL" != "true" && -f "$INFO_FILE" ]]; then
   EXISTING_PORT=$(panel_info_value PORT)
   EXISTING_WEB_BASE_PATH=$(panel_info_value WEB_BASE_PATH)
@@ -322,6 +376,7 @@ if [[ "$FRESH_INSTALL" != "true" && -f "$INFO_FILE" ]]; then
   EXISTING_PASSWORD=$(panel_info_value PASSWORD)
   EXISTING_AGENT_SECRET=$(panel_info_value API_TOKEN)
 fi
+EXISTING_MANIFEST_URL=$(env_file_value ZXY_UPDATE_MANIFEST_URL)
 
 PANEL_PORT=${PANEL_PORT:-${EXISTING_PORT:-$(random_unused_port)}}
 WEB_BASE_PATH=${WEB_BASE_PATH:-${EXISTING_WEB_BASE_PATH:-$(random_string 18)}}
@@ -330,6 +385,7 @@ ADMIN_PASSWORD=${ZXY_ADMIN_PASSWORD:-${EXISTING_PASSWORD:-$(random_string 12)}}
 ADMIN_PASSWORD_DISPLAY="$ADMIN_PASSWORD"
 JWT_SECRET=$(random_string 64)
 AGENT_SECRET=${EXISTING_AGENT_SECRET:-$(random_string 64)}
+MANIFEST_URL_TO_WRITE=${ZXY_UPDATE_MANIFEST_URL:-${EXISTING_MANIFEST_URL:-}}
 
 step "Preparing directories"
 mkdir -p "$APP_DIR" "$APP_DIR/backups" "$CONFIG_DIR"
@@ -376,7 +432,7 @@ ZXY_LOCAL_SERVER_HOST=${LOCAL_HOST}
 ZXY_LOCAL_SERVER_NAME=本机服务器
 ZXY_LOCAL_SERVER_REGION=Local
 ZXY_LOCAL_SERVER_PROVIDER=Self-hosted
-ZXY_UPDATE_MANIFEST_URL=${ZXY_UPDATE_MANIFEST_URL:-}
+ZXY_UPDATE_MANIFEST_URL=${MANIFEST_URL_TO_WRITE}
 EOF_ENV
 chmod 600 .env
 

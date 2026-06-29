@@ -3,8 +3,8 @@ import qrcode from 'qrcode-generator'
 export type ShareFormat = 'v2rayn' | 'shadowrocket' | 'clash' | 'singbox'
 
 export const shareFormatOptions: Array<{ value: ShareFormat; label: string; tip: string }> = [
-  { value: 'v2rayn', label: 'V2rayN', tip: 'Windows / TUN / 桌面客户端，保留 xudp 参数。' },
-  { value: 'shadowrocket', label: 'Shadowrocket', tip: 'iPhone 小火箭，生成更简洁的 VLESS Reality 链接。' },
+  { value: 'v2rayn', label: 'V2rayN', tip: '通用 VLESS Reality 单节点链接，优先用于扫码导入。' },
+  { value: 'shadowrocket', label: 'Shadowrocket', tip: 'iPhone 小火箭，使用同一条 VLESS Reality 通用链接。' },
   { value: 'clash', label: 'Clash Meta', tip: '生成 Clash Meta YAML 配置，可复制到配置文件。' },
   { value: 'singbox', label: 'sing-box', tip: '生成 sing-box JSON 配置，可用于 sing-box / SFI。' },
 ]
@@ -42,9 +42,13 @@ export function qrImageUrl(text: string, size = 560): string {
   const data = String(text || '').trim()
   if (!data) return ''
   const targetSize = Math.max(260, Math.min(Number(size) || 560, 900))
-  // V0.7.1: V2rayN 对本地 GIF/Canvas 长链二维码兼容性不稳定。
-  // 回退到 V0.5.x 稳定的 PNG 服务，并优先给 V2rayN 使用短链接二维码，降低二维码密度。
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${targetSize}x${targetSize}&margin=16&ecc=L&format=png&data=${encodeURIComponent(data)}`
+  const qr = qrcode(0, 'M')
+  qr.addData(data)
+  qr.make()
+  const margin = 8
+  const moduleCount = qr.getModuleCount() || 41
+  const cellSize = Math.max(3, Math.floor(targetSize / (moduleCount + margin * 2)))
+  return qr.createDataURL(cellSize, margin)
 }
 
 function appBasePath(): string {
@@ -115,16 +119,16 @@ export function buildVlessLink(node: any, client: any, format: 'v2rayn' | 'shado
   const security = valueOr(node.security, 'none').toLowerCase()
   const q = new URLSearchParams()
   q.set('encryption', 'none')
-  q.set('type', transport)
   q.set('security', security)
-  if (format === 'v2rayn') q.set('packetEncoding', 'xudp')
   if (node.sni) q.set('sni', node.sni)
   if (security === 'reality') {
+    q.set('flow', 'xtls-rprx-vision')
     q.set('fp', valueOr(node.fingerprint, 'chrome'))
     if (node.reality_public_key) q.set('pbk', node.reality_public_key)
     if (node.reality_short_id) q.set('sid', node.reality_short_id)
     q.set('spx', valueOr(node.reality_spider_x, '/'))
   }
+  q.set('type', transport)
   if (transport === 'ws' && node.path) q.set('path', node.path)
   if (transport === 'grpc' && node.path) q.set('serviceName', String(node.path).replace(/^\/+/, ''))
   const label = encodeURIComponent(nodeName(node))

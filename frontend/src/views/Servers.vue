@@ -7,8 +7,8 @@ const form = ref<any>({ name:'', ip:'', host:'', region:'US', provider:'' })
 const error = ref('')
 const message = ref('')
 const selectedInstall = ref('')
-const PACKAGE_NAME = 'zxy-panel-v0.7.5.8.1-node-diagnosis-center.zip'
-const PACKAGE_DIR = 'zxy-panel-v0.7.5.8.1-node-diagnosis-center'
+const PACKAGE_NAME = 'zxy-panel-v0.7.5.9-node-diagnosis-center.zip'
+const PACKAGE_DIR = 'zxy-panel-v0.7.5.9-node-diagnosis-center'
 
 function publicPanelBase() {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
@@ -47,7 +47,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">高级：服务器管理</h1>
-      <p class="page-desc">V0.7.5.8.1 多服务器模式：本机服务器可作为主控/落地服务器，远程服务器复制一键命令后只安装 Agent 接入。</p>
+      <p class="page-desc">V0.7.5.9 多服务器模式：本机服务器可作为主控/落地服务器，远程服务器复制一键命令后只安装 Agent 接入。</p>
     </div>
   </div>
   <div class="form">

@@ -66,8 +66,8 @@ func (r *Router) subscription(w http.ResponseWriter, req *http.Request) {
 	_, _ = w.Write([]byte(strings.Join(lines, "\n")))
 }
 func (r *Router) shortShare(w http.ResponseWriter, req *http.Request) {
-	// V0.7.1: 短链接二维码。二维码中只放 /s/<token>/<nodeID>，
-	// 后端返回真实 vless:// 单节点链接，降低二维码密度，提升 V2rayN 识别率。
+	// V0.7.5.9: /s/<token>/<nodeID> 保留为兼容短链接接口。
+	// 默认二维码不再使用 HTTP 短链接，而是直接编码 vless:// 单节点链接。
 	parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/s/"), "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		http.Error(w, "short share not found", http.StatusNotFound)
@@ -155,13 +155,12 @@ func buildVlessShareLink(n model.Node, client model.Client) string {
 	}
 	q := url.Values{}
 	q.Set("encryption", "none")
-	q.Set("type", valueOr(n.Transport, "tcp"))
 	q.Set("security", valueOr(n.Security, "none"))
-	q.Set("packetEncoding", "xudp")
 	if n.SNI != "" {
 		q.Set("sni", n.SNI)
 	}
 	if strings.ToLower(n.Security) == "reality" {
+		q.Set("flow", "xtls-rprx-vision")
 		q.Set("fp", valueOr(n.Fingerprint, "chrome"))
 		if n.RealityPublicKey != "" {
 			q.Set("pbk", n.RealityPublicKey)
@@ -171,6 +170,7 @@ func buildVlessShareLink(n model.Node, client model.Client) string {
 		}
 		q.Set("spx", valueOr(n.RealitySpiderX, "/"))
 	}
+	q.Set("type", valueOr(n.Transport, "tcp"))
 	if strings.ToLower(n.Transport) == "ws" && n.Path != "" {
 		q.Set("path", n.Path)
 	}
@@ -184,9 +184,8 @@ func buildVlessShareLink(n model.Node, client model.Client) string {
 func buildRelayShareLink(r model.RelayRoute, client model.Client) string {
 	q := url.Values{}
 	q.Set("encryption", "none")
-	q.Set("type", "tcp")
+	q.Set("flow", "xtls-rprx-vision")
 	q.Set("security", "reality")
-	q.Set("packetEncoding", "xudp")
 	q.Set("sni", valueOr(r.RelaySNI, "www.intel.com"))
 	q.Set("fp", valueOr(r.RelayFingerprint, "chrome"))
 	if r.RelayRealityPublicKey != "" {
@@ -196,6 +195,7 @@ func buildRelayShareLink(r model.RelayRoute, client model.Client) string {
 		q.Set("sid", r.RelayRealityShortID)
 	}
 	q.Set("spx", valueOr(r.RelayRealitySpiderX, "/"))
+	q.Set("type", "tcp")
 	name := url.QueryEscape(r.Name)
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", client.UUID, valueOr(r.RelayHost, "127.0.0.1"), r.RelayPort, q.Encode(), name)
 }

@@ -298,7 +298,6 @@ function qrLabel() {
 }
 function qrTextForNode(item:any) {
   if (!item) return ''
-  if (shareTab.value === 'v2rayn' && shareClient.value) return buildShortNodeUrl(shareClient.value, item.node)
   return item.link || ''
 }
 function mainQrText() {
@@ -307,15 +306,15 @@ function mainQrText() {
   return shareText.value
 }
 function qrModeHint() {
-  if (shareTab.value === 'v2rayn') return 'V2rayN 使用短链接二维码，降低二维码密度；复制按钮仍复制完整节点链接。'
-  if (shareTab.value === 'subscription') return '订阅二维码用于批量导入和后续统一更新。'
+  if (shareTab.value === 'v2rayn') return 'V2rayN 二维码内容就是 vless:// 单节点链接，下载图片后可直接从图片导入。'
+  if (shareTab.value === 'subscription') return '订阅二维码用于批量导入和后续统一更新；HTTP 订阅可能被 v2rayN 拦截。'
   return '当前二维码为单节点配置二维码。'
 }
 onMounted(load)
 </script>
 <template>
   <div v-if="copyToast" class="copy-toast">{{ copyToast }}</div>
-  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.8.1 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.9 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
 
   <div class="client-summary-grid">
     <div class="client-summary-card"><span>客户总数</span><strong>{{ clientStats.total }}</strong></div>
@@ -488,7 +487,7 @@ onMounted(load)
           <strong>{{ opt.label }}</strong><span>{{ opt.tip }}</span>
         </button>
       </div>
-      <div class="notice warn modal-tip">{{ shareTip }}<br>请优先扫描单节点二维码；订阅二维码用于客户端后续统一更新。</div>
+      <div class="notice warn modal-tip">{{ shareTip }}<br>默认二维码为 vless:// 单节点链接；订阅二维码只用于批量更新，HTTP 订阅可能被 v2rayN 拦截。</div>
       <div v-if="!shareAvailableNodes.length && shareTab !== 'subscription'" class="empty-state">该客户暂无可用入站，请先新增入站或检查客户关联入站。</div>
       <div v-else class="share-modal-body">
         <div class="share-config-box">
@@ -498,7 +497,7 @@ onMounted(load)
         <div v-if="showQrForMainShare()" class="qr-box share-modal-qr big-share-qr">
             <img :src="qrImageUrl(mainQrText())" alt="二维码" />
             <span>{{ qrLabel() }}｜优先扫这个<br><small>{{ qrModeHint() }}</small></span>
-            <button class="btn" @click="openQrZoom(mainQrText(), qrLabel())">放大扫码</button>
+            <div class="inline-actions qr-actions"><button class="btn" @click="openQrZoom(mainQrText(), qrLabel())">放大扫码</button><a class="btn secondary" :href="qrImageUrl(mainQrText(), 760)" :download="qrLabel() + '.gif'">下载二维码</a></div>
           </div>
       </div>
       <div v-if="shareLinks.length" class="node-link-list">
@@ -506,7 +505,7 @@ onMounted(load)
           <div><strong>{{ item.node.name }}</strong><span>{{ item.node.host }}:{{ item.node.port }}<template v-if="item.node.exit_label"> → 出口 {{ item.node.exit_label }}</template></span></div>
           <div class="node-row-actions">
             <button class="btn secondary" @click="copyAny(item.link, '节点链接')">复制链接</button>
-            <button class="btn secondary" @click="openQrZoom(qrTextForNode(item), item.node.name + ' 单节点二维码')">放大扫码</button>
+            <button class="btn secondary" @click="openQrZoom(qrTextForNode(item), item.node.name + ' 单节点二维码')">放大扫码</button><a class="btn secondary" :href="qrImageUrl(qrTextForNode(item), 760)" :download="item.node.name + '-vless-qr.gif'">下载二维码</a>
           </div>
         </div>
       </div>
@@ -517,13 +516,13 @@ onMounted(load)
   <div v-if="qrZoomText" class="modal-mask qr-zoom-mask" @click.self="closeQrZoom">
     <div class="modal-card qr-zoom-card">
       <div class="modal-head">
-        <div><span class="eyebrow">扫码二维码</span><h2>{{ qrZoomTitle }}</h2><p>V2rayN 二维码采用短链接模式，识别率更高；复制按钮仍可复制完整节点链接。</p></div>
+        <div><span class="eyebrow">扫码二维码</span><h2>{{ qrZoomTitle }}</h2><p>当前二维码内容与复制链接一致；V2rayN 推荐下载二维码图片后从图片导入。</p></div>
         <button class="icon-btn" @click="closeQrZoom">×</button>
       </div>
       <div class="qr-zoom-body">
         <div class="qr-white-stage"><img :src="qrImageUrl(qrZoomText, 760)" alt="放大二维码" /></div>
         <div class="qr-zoom-actions">
-          <button class="btn" @click="copyAny(qrZoomText, '二维码内容')">复制二维码内容</button>
+          <button class="btn" @click="copyAny(qrZoomText, '二维码内容')">复制二维码内容</button><a class="btn secondary" :href="qrImageUrl(qrZoomText, 900)" :download="qrZoomTitle + '.gif'">下载二维码</a>
           <button class="btn secondary" @click="closeQrZoom">关闭</button>
         </div>
       </div>

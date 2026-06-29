@@ -627,3 +627,6 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover { opacity:
 .badge.fail { background:rgba(239,68,68,.12); color:#fca5a5; border-color:rgba(239,68,68,.28); }
 .diagnosis-tips { margin:0; padding-left:18px; display:grid; gap:10px; color:var(--muted); line-height:1.7; }
 @media (max-width: 1000px) { .diagnosis-grid { grid-template-columns:1fr; } .diagnosis-hero { align-items:flex-start; flex-direction:column; } }
+/* V0.7.5.9 QR import compatibility */
+.qr-actions { margin-top: 10px; justify-content: center; flex-wrap: wrap; }
+.qr-box a.btn, .qr-zoom-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

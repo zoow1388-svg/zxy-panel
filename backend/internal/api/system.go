@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.5.8.1-diagnosis-polish-upgrade-fix-agent-xray"
+const panelVersion = "0.7.5.9-qr-import-compatibility-agent-xray"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {

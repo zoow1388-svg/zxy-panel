@@ -171,7 +171,7 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
   <div class="page-head">
     <div>
       <h1 class="page-title">系统升级</h1>
-      <p class="page-desc">V0.7.5.8.1 托管升级中心：改用独立 systemd runner，API 重启不会中断升级，并支持识别/清理卡死任务。</p>
+      <p class="page-desc">V0.7.5.9 托管升级中心：改用独立 systemd runner，API 重启不会中断升级，并支持识别/清理卡死任务。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="loadStatus">刷新状态</button>

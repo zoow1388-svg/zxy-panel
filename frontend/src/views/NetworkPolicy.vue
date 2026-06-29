@@ -11,7 +11,7 @@ const preview = ref<any>(null)
 const policy = ref<any>({})
 
 const modeTips: Record<string, string> = {
-  compat: '默认推荐：保留 V0.7.5.8.1 稳定行为，公共 DNS + UseIPv4，不启用 53 阻断、不禁用 fallback、不阻断 QUIC。',
+  compat: '默认推荐：保留 V0.7.5.9 稳定行为，公共 DNS + UseIPv4，不启用 53 阻断、不禁用 fallback、不阻断 QUIC。',
   public_dns: '使用 1.1.1.1 / 8.8.8.8 / 9.9.9.9 和 UseIPv4，不启用强阻断，适合 AI / Google / 海外社媒。',
   dns_leak_guard: '偏向减少 DNS 漂移，但不强制阻断主链路。建议在 DNS 检测偶发异常时使用。',
   strict: '严格模式可能导致网速变慢、解析失败或软路由兼容性下降。仅建议确认 DNS 泄漏后手动启用。',
@@ -157,7 +157,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">网络策略中心</h1>
-      <p class="page-desc">V0.7.5.8.1：DNS、IPv6、QUIC、UDP、53 端口阻断全部由用户手动调配。升级不会自动启用强阻断，不会覆盖现网策略。</p>
+      <p class="page-desc">V0.7.5.9：DNS、IPv6、QUIC、UDP、53 端口阻断全部由用户手动调配。升级不会自动启用强阻断，不会覆盖现网策略。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="load" :disabled="loading">刷新状态</button>

@@ -72,7 +72,7 @@ const healthClass = computed(() => data.value.primary_server?.status === 'online
   <div class="dashboard-shell">
     <div class="dashboard-hero">
       <div>
-        <div class="eyebrow">ZXY Panel V0.7.5.8.1</div>
+        <div class="eyebrow">ZXY Panel V0.7.5.9</div>
         <h2>跨境业务网络节点管理控制台</h2>
         <p>这一版开始进入 UI 产品化阶段：仪表盘、资源状态、快捷操作、最近入站、最近客户和操作记录集中展示。核心 Reality、Agent、Xray、订阅和客户端适配链路保持不动。</p>
         <div class="hero-actions">

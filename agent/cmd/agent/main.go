@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "0.7.5.8.1-diagnosis-polish-upgrade-fix-agent-xray"
+const version = "0.7.5.9-qr-import-compatibility-agent-xray"
 
 type Heartbeat struct {
 	ServerID      string  `json:"server_id"`

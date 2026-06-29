@@ -327,7 +327,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">入站管理</h1>
-      <p class="page-desc">V0.7.5.8.1 入站管理清理版：协议下拉选择 VLESS 或 SOCKS5，快捷模板只负责填默认参数。</p>
+      <p class="page-desc">V0.7.5.9 入站管理清理版：协议下拉选择 VLESS 或 SOCKS5，快捷模板只负责填默认参数。</p>
     </div>
   </div>
 
@@ -437,7 +437,7 @@ onMounted(load)
       <div class="notice warn">{{ shareFormatOptions.find(x => x.value === shareFormat)?.tip }}</div>
       <div class="share-grid">
         <div class="share-box"><strong>{{ shareFormatLabel(shareFormat) }}</strong><div class="code share-code">{{ shareLink }}</div><div class="share-actions"><button class="btn" @click="copyShareLink">复制{{ shareFormatLabel(shareFormat) }}</button></div></div>
-        <div class="qr-box" v-if="shareLink && isQrShareFormat(shareFormat)"><img :src="qrImageUrl(shareLink, 560)" alt="节点二维码" /><span>{{ shareFormatLabel(shareFormat) }} 单节点二维码</span><button class="btn" @click="openQrZoom(shareLink, shareFormatLabel(shareFormat) + ' 单节点二维码')">放大扫码</button></div>
+        <div class="qr-box" v-if="shareLink && isQrShareFormat(shareFormat)"><img :src="qrImageUrl(shareLink, 560)" alt="节点二维码" /><span>{{ shareFormatLabel(shareFormat) }} 单节点二维码</span><button class="btn" @click="openQrZoom(shareLink, shareFormatLabel(shareFormat) + ' 单节点二维码')">放大扫码</button><a class="btn secondary" :href="qrImageUrl(shareLink, 760)" :download="shareFormatLabel(shareFormat) + '-vless-qr.gif'">下载二维码</a></div>
       </div>
     </div>
   </div>
@@ -489,8 +489,8 @@ onMounted(load)
 
   <div v-if="qrZoomText" class="modal-mask qr-zoom-mask" @click.self="closeQrZoom">
     <div class="modal-card qr-zoom-card">
-      <div class="modal-head"><div><span class="eyebrow">放大二维码</span><h2>{{ qrZoomTitle }}</h2><p>请让二维码尽量充满屏幕，V2rayN 扫屏幕时优先使用这个放大二维码。</p></div><button class="icon-btn" @click="closeQrZoom">×</button></div>
-      <div class="qr-zoom-body"><div class="qr-white-stage"><img :src="qrImageUrl(qrZoomText, 760)" alt="放大二维码" /></div><div class="qr-zoom-actions"><button class="btn" @click="copyShareLink">复制当前链接</button><button class="btn secondary" @click="closeQrZoom">关闭</button></div></div>
+      <div class="modal-head"><div><span class="eyebrow">放大二维码</span><h2>{{ qrZoomTitle }}</h2><p>当前二维码内容为 vless:// 单节点链接；V2rayN 推荐下载图片后从图片导入。</p></div><button class="icon-btn" @click="closeQrZoom">×</button></div>
+      <div class="qr-zoom-body"><div class="qr-white-stage"><img :src="qrImageUrl(qrZoomText, 760)" alt="放大二维码" /></div><div class="qr-zoom-actions"><button class="btn" @click="copyShareLink">复制当前链接</button><a class="btn secondary" :href="qrImageUrl(qrZoomText, 900)" :download="qrZoomTitle + '.gif'">下载二维码</a><button class="btn secondary" @click="closeQrZoom">关闭</button></div></div>
     </div>
   </div>
 

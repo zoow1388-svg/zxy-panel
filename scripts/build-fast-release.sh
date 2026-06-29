@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.5.8.1}"
-CODENAME="diagnosis-polish-upgrade-fix"
+VERSION="${1:-0.7.5.9}"
+CODENAME="qr-import-compatibility"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -64,11 +64,11 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "release_date": "$(date +%F)",
   "changelog": [
-    "优化节点体检中心评分与 DNS/IPv6 风险分级",
-    "区分宿主机 DNS、Xray DNS 与客户端浏览器 DNS，避免误判节点泄漏",
-    "托管升级改用独立 systemd runner，并支持卡死任务识别与清理",
-    "保留 V0.7.5.7 托管升级中心和 V0.7.5.6 fast/systemd 安装模式",
-    "保留 V0.7.5.5 网络策略配置中心"
+    "修复客户分享弹窗二维码内容错误：V2rayN/Shadowrocket 默认二维码改为 vless:// 单节点链接",
+    "VLESS Reality 分享链接补齐 flow=xtls-rprx-vision，并默认移除 packetEncoding=xudp，提升 v2rayN/v2rayNG/V2Box/Shadowrocket 兼容性",
+    "订阅二维码与单节点二维码分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
+    "二维码改为本地生成白底图片，支持下载二维码图片后从客户端导入",
+    "保留 V0.7.5.8.1 节点体检优化与升级任务修复"
   ]
 }
 JSON

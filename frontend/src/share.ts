@@ -122,7 +122,8 @@ export function buildVlessLink(node: any, client: any, format: 'v2rayn' | 'shado
   q.set('security', security)
   if (node.sni) q.set('sni', node.sni)
   if (security === 'reality') {
-    q.set('flow', 'xtls-rprx-vision')
+    // V0.7.5.9.1: keep QR/import URI aligned with server-side Xray client flow.
+    // Do not force flow=xtls-rprx-vision unless the server actually configures client.flow.
     q.set('fp', valueOr(node.fingerprint, 'chrome'))
     if (node.reality_public_key) q.set('pbk', node.reality_public_key)
     if (node.reality_short_id) q.set('sid', node.reality_short_id)

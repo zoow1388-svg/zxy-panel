@@ -1,17 +1,18 @@
 {
-  "latest": "0.7.5.9-qr-import-compatibility-agent-xray",
-  "version": "0.7.5.9",
-  "codename": "qr-import-compatibility",
-  "package": "zxy-panel-v0.7.5.9-qr-import-compatibility.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.9/zxy-panel-v0.7.5.9-qr-import-compatibility.zip",
-  "sha256": "9ef6ada8a2de205877a075f298fbdf4acda743dfa76f8a08fb413c21f25b4c50",
+  "latest": "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray",
+  "version": "0.7.5.9.1",
+  "codename": "qr-flow-compatibility-fix",
+  "package": "zxy-panel-v0.7.5.9.1-qr-flow-compatibility-fix.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.9.1/zxy-panel-v0.7.5.9.1-qr-flow-compatibility-fix.zip",
+  "sha256": "7d68b13d76298a0a982875417416439063c3c1b3fc96443065766484c309f874",
   "min_supported_version": "0.7.5",
   "released_at": "2026-06-29T00:00:00Z",
   "changelog": [
-    "修复客户分享弹窗二维码内容错误：V2rayN/Shadowrocket 默认二维码改为 vless:// 单节点链接",
-    "VLESS Reality 分享链接补齐 flow=xtls-rprx-vision，并默认移除 packetEncoding=xudp，提升 v2rayN、v2rayNG、V2Box、Shadowrocket 兼容性",
-    "订阅二维码与单节点二维码分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
-    "二维码改为本地生成白底图片，支持下载二维码图片后从客户端导入",
-    "保留 V0.7.5.8.1 节点体检优化与升级任务修复"
+    "修复 V0.7.5.9 默认 VLESS Reality 分享链接强制添加 flow=xtls-rprx-vision，导致服务端 client.flow 为空时扫码后无法连接的问题",
+    "默认二维码继续保持 vless:// 单节点链接，不再回退为 HTTP 短链接或订阅地址",
+    "默认分享链接和二维码按服务端 Xray client.flow 保持一致；当前服务端 flow 为空时，链接不带 flow 参数",
+    "默认通用二维码不强制加入 packetEncoding=xudp，提高 v2rayN、v2rayNG、V2Box、Shadowrocket 兼容性",
+    "订阅二维码与单节点二维码保持分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
+    "保留 V0.7.5.8.1 节点体检优化、升级任务修复和 V0.7.5.8 节点诊断中心"
   ]
 }

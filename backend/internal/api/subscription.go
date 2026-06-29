@@ -66,7 +66,7 @@ func (r *Router) subscription(w http.ResponseWriter, req *http.Request) {
 	_, _ = w.Write([]byte(strings.Join(lines, "\n")))
 }
 func (r *Router) shortShare(w http.ResponseWriter, req *http.Request) {
-	// V0.7.5.9: /s/<token>/<nodeID> 保留为兼容短链接接口。
+	// V0.7.5.9.1: /s/<token>/<nodeID> 保留为兼容短链接接口。
 	// 默认二维码不再使用 HTTP 短链接，而是直接编码 vless:// 单节点链接。
 	parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/s/"), "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
@@ -160,7 +160,9 @@ func buildVlessShareLink(n model.Node, client model.Client) string {
 		q.Set("sni", n.SNI)
 	}
 	if strings.ToLower(n.Security) == "reality" {
-		q.Set("flow", "xtls-rprx-vision")
+		// V0.7.5.9.1: do not force flow in share URI.
+		// The current Xray server-side client config uses an empty flow.
+		// Adding flow=xtls-rprx-vision in the client URI while the server has no flow causes v2rayN to import successfully but fail to connect.
 		q.Set("fp", valueOr(n.Fingerprint, "chrome"))
 		if n.RealityPublicKey != "" {
 			q.Set("pbk", n.RealityPublicKey)
@@ -184,7 +186,8 @@ func buildVlessShareLink(n model.Node, client model.Client) string {
 func buildRelayShareLink(r model.RelayRoute, client model.Client) string {
 	q := url.Values{}
 	q.Set("encryption", "none")
-	q.Set("flow", "xtls-rprx-vision")
+	// V0.7.5.9.1: relay share links must also match the server-side client flow.
+	// Current generated Xray clients use empty flow, so the default QR/link must not include flow.
 	q.Set("security", "reality")
 	q.Set("sni", valueOr(r.RelaySNI, "www.intel.com"))
 	q.Set("fp", valueOr(r.RelayFingerprint, "chrome"))

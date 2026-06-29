@@ -126,7 +126,7 @@ func (r *Router) buildNodeDiagnosis() nodeDiagnosisResponse {
 			config = append(config, diagnosisItem{Key: "nginx_routes", Label: "Nginx 反代路径", Status: "ok", Message: "已包含 /api/、/sub/、/s/ 根路径反代，登录和订阅接口可正常转发。"})
 		} else {
 			config = append(config, diagnosisItem{Key: "nginx_routes", Label: "Nginx 反代路径", Status: "fail", Message: "缺少关键反代路径：" + strings.Join(missing, "、") + "。"})
-			recommendations = append(recommendations, "重新运行 V0.7.5.9 安装脚本，或修复 /etc/nginx/conf.d/zxy-panel.conf。")
+			recommendations = append(recommendations, "重新运行 V0.7.5.9.1 安装脚本，或修复 /etc/nginx/conf.d/zxy-panel.conf。")
 		}
 		if webBasePath != "" && strings.Contains(txt, "/"+webBasePath+"/") {
 			config = append(config, diagnosisItem{Key: "web_base_path", Label: "随机后台路径", Status: "ok", Message: "Nginx 已包含当前 WebBasePath：/" + webBasePath + "/。"})

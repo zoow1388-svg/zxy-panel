@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.5.9}"
-CODENAME="qr-import-compatibility"
+VERSION="${1:-0.7.5.9.1}"
+CODENAME="qr-flow-compatibility-fix"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -65,8 +65,8 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "release_date": "$(date +%F)",
   "changelog": [
     "修复客户分享弹窗二维码内容错误：V2rayN/Shadowrocket 默认二维码改为 vless:// 单节点链接",
-    "VLESS Reality 分享链接补齐 flow=xtls-rprx-vision，并默认移除 packetEncoding=xudp，提升 v2rayN/v2rayNG/V2Box/Shadowrocket 兼容性",
-    "订阅二维码与单节点二维码分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
+    "VLESS Reality 分享链接不再强制添加 flow=xtls-rprx-vision，按服务端 Xray client.flow 保持一致，修复扫码后可导入但无法连接的问题",
+    "继续保持单节点二维码为 vless://，订阅二维码与单节点二维码分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
     "二维码改为本地生成白底图片，支持下载二维码图片后从客户端导入",
     "保留 V0.7.5.8.1 节点体检优化与升级任务修复"
   ]

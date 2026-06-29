@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.5.9-qr-import-compatibility-agent-xray"
+const panelVersion = "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {

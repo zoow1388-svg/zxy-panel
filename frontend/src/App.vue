@@ -15,7 +15,7 @@ const mainNav = [
   { to: '/clients', label: '客户管理', icon: '◉', desc: '订阅与二维码' },
 ]
 const opsNav = [
-  { to: '/diagnostics', label: '系统检测', icon: '✓', desc: '健康检查' },
+  { to: '/diagnostics', label: '节点体检', icon: '✓', desc: '一键诊断' },
   { to: '/logs', label: '系统日志', icon: '≡', desc: '操作记录' },
   { to: '/settings', label: '系统设置', icon: '⚙', desc: '密码与安全' },
   { to: '/updates', label: '系统升级', icon: '⬆', desc: '版本与核心' },

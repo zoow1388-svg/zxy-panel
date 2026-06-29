@@ -315,7 +315,7 @@ onMounted(load)
 </script>
 <template>
   <div v-if="copyToast" class="copy-toast">{{ copyToast }}</div>
-  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.5 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.8 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
 
   <div class="client-summary-grid">
     <div class="client-summary-card"><span>客户总数</span><strong>{{ clientStats.total }}</strong></div>

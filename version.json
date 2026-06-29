@@ -1,17 +1,18 @@
 {
-  "latest": "0.7.5.6-fast-install-agent-xray",
-  "version": "0.7.5.6",
-  "codename": "fast-install",
-  "package": "zxy-panel-v0.7.5.6-fast-install.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.6/zxy-panel-v0.7.5.6-fast-install.zip",
-  "sha256": "a4491392059286595c93c070a5669910914727bace8f4d03865c3e6e662a493a",
-  "min_supported_version": "0.7.4",
-  "release_date": "2026-06-29",
+  "latest": "0.7.5.8-node-diagnosis-center-agent-xray",
+  "version": "0.7.5.8",
+  "codename": "node-diagnosis-center",
+  "package": "zxy-panel-v0.7.5.8-node-diagnosis-center.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.8/zxy-panel-v0.7.5.8-node-diagnosis-center.zip",
+  "sha256": "f0c690fe9fd376146aa3e5d5a185a9217e3caddfd6b396d59d2cc8fcce009f17",
+  "min_supported_version": "0.7.5",
+  "released_at": "2026-06-29T00:00:00Z",
   "changelog": [
-    "新增 fast/systemd 安装模式，预构建产物存在时跳过 Docker、Go、Node 和 npm 现场构建",
-    "修复 fast 模式 Nginx 路由，/api/、/sub/、/s/ 与 WebBasePath 前缀路径均可正确反代",
-    "修复 API、Agent、系统版本仍显示 0.7.5.5 的问题",
-    "保留 Docker 兼容模式和 V0.7.5.5 网络策略中心功能",
-    "保留 V0.7.5.3 CA 证书修复与 V0.7.5.2 一键安装优化"
+    "新增节点诊断与一键体检中心，集中检测面板入口、API、Agent、Xray、Nginx 反代和节点端口",
+    "新增 /api/diagnostics/run 和 /api/diagnostics/report，可在后台生成并复制排障报告",
+    "检测 fast/systemd 模式 Nginx 是否正确反代 /api/、/sub/、/s/，避免登录 404 问题复发",
+    "增加 DNS 中国公共解析、IPv6 状态、网络策略强度和本机公网出口 IP 风险提示",
+    "节点端口体检支持本机端口监听检测，远程端口给出 Agent/安全组人工确认提示",
+    "保留 V0.7.5.7 托管升级中心、V0.7.5.6 fast/systemd 安装、V0.7.5.5 网络策略中心"
   ]
 }

@@ -80,7 +80,7 @@ func socks5HTTPGet(socksHost string, socksPort int, username, password, targetHo
 	if path == "" {
 		path = "/"
 	}
-	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: ZXY-Panel/0.7.5.5\r\nAccept: text/plain\r\nConnection: close\r\n\r\n", path, httpHost)
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: ZXY-Panel/0.7.5.8\r\nAccept: text/plain\r\nConnection: close\r\n\r\n", path, httpHost)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return "", fmt.Errorf("通过 SOCKS5 发送出口检测请求失败：%w", err)
 	}

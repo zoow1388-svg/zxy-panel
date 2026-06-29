@@ -317,10 +317,6 @@ server {
     index index.html;
     client_max_body_size 20m;
 
-    location = / {
-        return 302 /${WEB_BASE_PATH}/;
-    }
-
     location = /index.html {
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
         add_header Pragma "no-cache" always;
@@ -328,8 +324,8 @@ server {
         try_files /index.html =404;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/api/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/api/\$1;
+    location = /api {
+        proxy_pass http://127.0.0.1:${API_PORT}/api\$is_args\$args;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -337,8 +333,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/sub/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/sub/\$1;
+    location = /${WEB_BASE_PATH}/api {
+        proxy_pass http://127.0.0.1:${API_PORT}/api\$is_args\$args;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -346,8 +342,62 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/s/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/s/\$1;
+    location ~ ^/(?:${WEB_BASE_PATH}/)?api/(.*)\$ {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/\$1\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /sub {
+        proxy_pass http://127.0.0.1:${API_PORT}/sub\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /${WEB_BASE_PATH}/sub {
+        proxy_pass http://127.0.0.1:${API_PORT}/sub\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location ~ ^/(?:${WEB_BASE_PATH}/)?sub/(.*)\$ {
+        proxy_pass http://127.0.0.1:${API_PORT}/sub/\$1\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /s {
+        proxy_pass http://127.0.0.1:${API_PORT}/s\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location = /${WEB_BASE_PATH}/s {
+        proxy_pass http://127.0.0.1:${API_PORT}/s\$is_args\$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location ~ ^/(?:${WEB_BASE_PATH}/)?s/(.*)\$ {
+        proxy_pass http://127.0.0.1:${API_PORT}/s/\$1\$is_args\$args;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -366,6 +416,10 @@ server {
     }
 
     location /${WEB_BASE_PATH}/ {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location / {
         try_files \$uri \$uri/ /index.html;
     }
 }

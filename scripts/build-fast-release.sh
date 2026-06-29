@@ -3,6 +3,7 @@ set -euo pipefail
 
 VERSION="${1:-0.7.5.6}"
 CODENAME="fast-install"
+FULL_VERSION="${VERSION}-${CODENAME}-agent-xray"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -20,11 +21,11 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR" "$ROOT_DIR/bin"
 
 echo "[1/5] Building backend API binary"
-(cd "$ROOT_DIR/backend" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
+(cd "$ROOT_DIR/backend" && go test ./... && go build -trimpath -ldflags="-s -w -X zxy-panel/backend/internal/version.Version=${FULL_VERSION}" -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
 chmod +x "$ROOT_DIR/bin/zxy-panel-api-linux-amd64"
 
 echo "[2/5] Building agent binary"
-(cd "$ROOT_DIR/agent" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
+(cd "$ROOT_DIR/agent" && go test ./... && go build -trimpath -ldflags="-s -w -X main.version=${FULL_VERSION}" -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
 chmod +x "$ROOT_DIR/bin/zxy-agent-linux-amd64"
 
 echo "[3/5] Building frontend dist"
@@ -55,7 +56,7 @@ test -f "$PKG_ROOT/frontend/dist/index.html"
 SHA256="$(sha256sum "$PKG_PATH" | awk '{print $1}')"
 cat > "$OUT_DIR/version.fast.json" <<JSON
 {
-  "latest": "${VERSION}-${CODENAME}-agent-xray",
+  "latest": "${FULL_VERSION}",
   "version": "${VERSION}",
   "codename": "${CODENAME}",
   "package": "${PKG_NAME}",

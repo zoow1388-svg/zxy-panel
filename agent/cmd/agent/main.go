@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "0.7.5.5-network-policy-center-agent-xray"
+var version = "0.7.5.6-fast-install-agent-xray"
 
 type Heartbeat struct {
 	ServerID      string  `json:"server_id"`

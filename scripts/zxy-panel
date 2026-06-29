@@ -22,6 +22,27 @@ compose_cmd() {
   fi
 }
 
+install_mode() {
+  get_info INSTALL_MODE || true
+}
+
+restart_api() {
+  local mode
+  mode="$(install_mode)"
+  if [[ "$mode" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    systemctl restart zxy-panel-api
+    return
+  fi
+  local compose
+  compose="$(compose_cmd)"
+  if [[ -z "$compose" ]]; then
+    echo "docker compose not found"
+    exit 1
+  fi
+  cd "$APP_DIR"
+  $compose restart zxy-panel-api >/dev/null
+}
+
 case "${1:-}" in
   info)
     if [[ ! -f "$PANEL_INFO" ]]; then
@@ -35,9 +56,11 @@ case "${1:-}" in
     ACCESS_URL=$(get_info ACCESS_URL)
     DATABASE=$(get_info DATABASE)
     VERSION=$(get_info VERSION)
+    MODE=$(get_info INSTALL_MODE)
     echo "ZXY Panel Info"
     echo "=============================="
     printf "%-12s %s\n" "Version:" "${VERSION:-unknown}"
+    printf "%-12s %s\n" "Mode:" "${MODE:-docker}"
     printf "%-12s %s\n" "Username:" "${USERNAME:-unknown}"
     printf "%-12s %s\n" "Password:" "${PASSWORD:-unknown}"
     printf "%-12s %s\n" "Port:" "${PORT:-unknown}"
@@ -49,35 +72,61 @@ case "${1:-}" in
     ;;
 
   status)
-    COMPOSE=$(compose_cmd)
-    if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
-      cd "$APP_DIR"
-      $COMPOSE ps || true
+    MODE=$(install_mode)
+    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+      systemctl status zxy-panel-api --no-pager -l 2>/dev/null || true
       echo
       systemctl status zxy-agent --no-pager -l 2>/dev/null || true
+      echo
       systemctl status nginx --no-pager -l 2>/dev/null || true
     else
-      echo "Docker Compose not found or app dir missing."
+      COMPOSE=$(compose_cmd)
+      if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
+        cd "$APP_DIR"
+        $COMPOSE ps || true
+        echo
+        systemctl status zxy-agent --no-pager -l 2>/dev/null || true
+        systemctl status nginx --no-pager -l 2>/dev/null || true
+      else
+        echo "Docker Compose not found or app dir missing."
+      fi
     fi
     ;;
 
   restart)
-    COMPOSE=$(compose_cmd)
-    if [[ -z "$COMPOSE" ]]; then
-      echo "docker compose not found"
-      exit 1
+    MODE=$(install_mode)
+    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+      systemctl restart zxy-panel-api 2>/dev/null || true
+      systemctl restart zxy-agent 2>/dev/null || true
+      systemctl restart nginx 2>/dev/null || true
+    else
+      COMPOSE=$(compose_cmd)
+      if [[ -z "$COMPOSE" ]]; then
+        echo "docker compose not found"
+        exit 1
+      fi
+      cd "$APP_DIR"
+      $COMPOSE restart
+      systemctl restart zxy-agent 2>/dev/null || true
+      systemctl restart nginx 2>/dev/null || true
     fi
-    cd "$APP_DIR"
-    $COMPOSE restart
-    systemctl restart zxy-agent 2>/dev/null || true
-    systemctl restart nginx 2>/dev/null || true
     echo "ZXY Panel restarted."
     ;;
 
   logs)
-    COMPOSE=$(compose_cmd)
-    cd "$APP_DIR"
-    $COMPOSE logs --tail=120 -f
+    MODE=$(install_mode)
+    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+      echo "Showing fast-mode logs. Ctrl+C to exit."
+      journalctl -u zxy-panel-api -u zxy-agent -f --no-pager
+    else
+      COMPOSE=$(compose_cmd)
+      if [[ -z "$COMPOSE" ]]; then
+        echo "docker compose not found"
+        exit 1
+      fi
+      cd "$APP_DIR"
+      $COMPOSE logs --tail=120 -f
+    fi
     ;;
 
   reset-password)
@@ -124,16 +173,14 @@ os.replace(tmp,path)
 PY
     sed -i -E "s/^USERNAME=.*/USERNAME=${NEW_USERNAME}/" "$PANEL_INFO"
     sed -i -E "s/^PASSWORD=.*/PASSWORD=${NEW_PASSWORD}/" "$PANEL_INFO"
-    COMPOSE=$(compose_cmd)
-    cd "$APP_DIR"
-    $COMPOSE restart zxy-panel-api >/dev/null
+    restart_api
     echo "Password reset successfully."
     echo "Username: ${NEW_USERNAME}"
     echo "Password: ${NEW_PASSWORD}"
     ;;
 
   update)
-    MANIFEST_URL="${ZXY_UPDATE_MANIFEST_URL:-https://raw.githubusercontent.com/zxy-panel/zxy-panel/main/version.json}"
+    MANIFEST_URL="${ZXY_UPDATE_MANIFEST_URL:-https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json}"
     echo "ZXY Panel Update Helper"
     echo "Manifest: ${MANIFEST_URL}"
     echo
@@ -160,13 +207,18 @@ print('Package:', pkg)
 print('Download:', dl)
 if sha:
     print('SHA256:', sha)
-print('
-Copy this command to upgrade after confirming the package:')
+print('\nCopy this command to upgrade after confirming the package:')
 print('cd /root && mkdir -p zxy-panel-upgrades && cd zxy-panel-upgrades && curl -L --fail -o %s %s && unzip -o %s && cd %s && bash deploy/install.sh 2>&1 | tee /root/zxy-panel-upgrade.log' % (pkg, dl, pkg, pkg[:-4] if pkg.endswith('.zip') else pkg))
 PY_UPDATE
     ;;
 
   uninstall)
+    MODE=$(install_mode)
+    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+      systemctl stop zxy-panel-api 2>/dev/null || true
+      systemctl disable zxy-panel-api 2>/dev/null || true
+      rm -f /etc/systemd/system/zxy-panel-api.service
+    fi
     COMPOSE=$(compose_cmd)
     if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
       cd "$APP_DIR"

@@ -1,0 +1,76 @@
+name: Build Fast Release
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example 0.7.5.6'
+        required: true
+        default: '0.7.5.6'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
+
+      - name: Build fast release package
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ] && [ "${{ github.event_name }}" = "pull_request" ]; then VERSION="0.7.5.6"; fi
+          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          bash scripts/build-fast-release.sh "$VERSION"
+
+      - name: Verify fast release zip contents
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ] && [ "${{ github.event_name }}" = "pull_request" ]; then VERSION="0.7.5.6"; fi
+          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          PKG="dist-release/zxy-panel-v${VERSION}-fast-install.zip"
+          unzip -l "$PKG" | tee dist-release/zip-contents.txt
+          unzip -l "$PKG" | grep -F "bin/zxy-panel-api-linux-amd64"
+          unzip -l "$PKG" | grep -F "bin/zxy-agent-linux-amd64"
+          unzip -l "$PKG" | grep -F "frontend/dist/index.html"
+          unzip -l "$PKG" | grep -F "deploy/install.sh"
+          unzip -l "$PKG" | grep -F "deploy/agent-install.sh"
+          unzip -l "$PKG" | grep -F "scripts/zxy-panel"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zxy-panel-fast-release
+          path: |
+            dist-release/*.zip
+            dist-release/version.fast.json
+
+      - name: Publish GitHub release when pushed as tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="dist-release/zxy-panel-v${VERSION}-fast-install.zip"
+          SHA="$(sha256sum "$PKG" | awk '{print $1}')"
+          gh release create "$GITHUB_REF_NAME" "$PKG" --title "ZXY Panel V${VERSION} Fast Install" --notes "Fast install release. SHA256: ${SHA}" || \
+          gh release upload "$GITHUB_REF_NAME" "$PKG" --clobber

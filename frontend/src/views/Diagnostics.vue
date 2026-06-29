@@ -15,7 +15,7 @@ const copying = ref(false)
 
 function statusText(status:string) {
   if (status === 'ok') return '正常'
-  if (status === 'fail') return '失败'
+  if (status === 'fail') return '风险'
   return '注意'
 }
 
@@ -29,9 +29,11 @@ async function runDiagnosis() {
   error.value = ''
   message.value = ''
   loading.value = true
+  data.value = null
+  report.value = ''
   try {
     data.value = await api(`/api/diagnostics/run?t=${Date.now()}`)
-    message.value = `一键体检完成，评分 ${data.value.score} 分。`
+    message.value = `一键体检完成，评分 ${data.value.score} 分，检测时间 ${data.value.checked_at}。`
   } catch(e:any) {
     error.value = e?.message || '节点体检失败'
   } finally {
@@ -66,7 +68,7 @@ onMounted(runDiagnosis)
   <div class="page-head">
     <div>
       <h1 class="page-title">节点诊断与一键体检中心</h1>
-      <p class="page-desc">V0.7.5.8：面板入口、API、Agent、Xray、Nginx 反代、节点端口、DNS/IPv6 风险一次性检测，方便复制报告给技术排障。</p>
+      <p class="page-desc">V0.7.5.8.1：区分宿主机 DNS、Xray DNS 与客户端 DNS，DNS/IPv6 注意项不再直接等同节点泄漏。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="copyReport" :disabled="copying || loading">{{ copying ? '生成中...' : '复制诊断报告' }}</button>
@@ -76,6 +78,8 @@ onMounted(runDiagnosis)
 
   <div class="error" v-if="error">{{ error }}</div>
   <div class="success" v-if="message">{{ message }}</div>
+
+  <div v-if="loading" class="notice">正在重新读取系统状态、网络策略、Nginx/Xray 配置和节点端口，请稍等...</div>
 
   <div v-if="data" class="diagnosis-hero card">
     <div>

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.5.8}"
-CODENAME="node-diagnosis-center"
+VERSION="${1:-0.7.5.8.1}"
+CODENAME="diagnosis-polish-upgrade-fix"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -61,12 +61,12 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "package": "${PKG_NAME}",
   "download_url": "REPLACE_WITH_GITHUB_RELEASE_DOWNLOAD_URL/${PKG_NAME}",
   "sha256": "${SHA256}",
-  "min_supported_version": "0.7.4",
+  "min_supported_version": "0.7.5",
   "release_date": "$(date +%F)",
   "changelog": [
-    "新增节点诊断与一键体检中心，集中检测面板入口、API、Agent、Xray、Nginx 反代和节点端口",
-    "新增 /api/diagnostics/run 和 /api/diagnostics/report，可在后台生成并复制排障报告",
-    "增加 DNS 中国公共解析、IPv6 状态、网络策略强度和本机公网出口 IP 风险提示",
+    "优化节点体检中心评分与 DNS/IPv6 风险分级",
+    "区分宿主机 DNS、Xray DNS 与客户端浏览器 DNS，避免误判节点泄漏",
+    "托管升级改用独立 systemd runner，并支持卡死任务识别与清理",
     "保留 V0.7.5.7 托管升级中心和 V0.7.5.6 fast/systemd 安装模式",
     "保留 V0.7.5.5 网络策略配置中心"
   ]

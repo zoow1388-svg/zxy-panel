@@ -32,6 +32,8 @@ type upgradeTaskState struct {
 	ExitCode       int            `json:"exit_code,omitempty"`
 	Error          string         `json:"error,omitempty"`
 	Manifest       updateManifest `json:"manifest,omitempty"`
+	Stale          bool           `json:"stale,omitempty"`
+	StaleReason    string         `json:"stale_reason,omitempty"`
 }
 
 func (r *Router) updateTaskLatest(w http.ResponseWriter, req *http.Request) {
@@ -44,6 +46,7 @@ func (r *Router) updateTaskLatest(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "has_task": false, "message": "暂无升级任务"})
 		return
 	}
+	state = normalizeUpgradeTaskState(state)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "has_task": true, "task": state})
 }
 
@@ -57,7 +60,7 @@ func (r *Router) updateTaskLogs(w http.ResponseWriter, req *http.Request) {
 	if logFile == "" {
 		logFile = filepath.Join(installDir, "logs", "upgrade-task.log")
 	}
-	limit := int64(96 * 1024)
+	limit := int64(128 * 1024)
 	text := tailFile(logFile, limit)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "log_file": logFile, "logs": text})
 }
@@ -77,6 +80,39 @@ func (r *Router) updateTaskPrecheck(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "checks": checks, "message": precheckMessage(ok)})
 }
 
+func (r *Router) updateTaskClearStale(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	state, err := readUpgradeTaskState()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "暂无需要清理的升级任务"})
+		return
+	}
+	state = normalizeUpgradeTaskState(state)
+	if !state.Stale && isActiveUpgradeStatus(state.Status) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "当前任务仍在执行中，尚未达到卡死清理条件。", "task": state})
+		return
+	}
+	if state.Status == "success" || state.Status == "failed" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "任务已结束，无需清理。", "task": state})
+		return
+	}
+	state.Status = "failed"
+	state.Stage = "stale_cleaned"
+	state.Message = "已由管理员清理卡死升级任务。日志和备份已保留，可重新检查更新或使用 SSH 命令兜底。"
+	state.Error = firstNonEmpty(state.StaleReason, "upgrade task stale and manually cleaned")
+	state.ExitCode = 98
+	state.CompletedAt = time.Now().Format(time.RFC3339)
+	state.Stale = true
+	if state.StaleReason == "" {
+		state.StaleReason = "任务超时未更新，已清理为 failed。"
+	}
+	_ = writeUpgradeTaskState(state)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": state.Message, "task": state})
+}
+
 func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		methodNotAllowed(w)
@@ -88,7 +124,8 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 	}
 	if runningUpgradeTask() {
 		state, _ := readUpgradeTaskState()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "已有升级任务正在执行，请等待完成。", "task": state})
+		state = normalizeUpgradeTaskState(state)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "已有升级任务正在执行，请等待完成。若任务超过 10 分钟未更新，可先清理卡死任务。", "task": state})
 		return
 	}
 	manifestURL := updateManifestURL()
@@ -119,7 +156,7 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		ID:             id,
 		Status:         "pending",
 		Stage:          "created",
-		Message:        "升级任务已创建，等待宿主机脚本接管。",
+		Message:        "升级任务已创建，等待独立 systemd runner 接管。",
 		CurrentVersion: panelVersion,
 		TargetVersion:  firstNonEmpty(manifest.Latest, manifest.Version),
 		Package:        pkg,
@@ -148,10 +185,7 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "无法生成升级脚本：" + err.Error(), "task": task})
 		return
 	}
-	cmd := exec.Command("nohup", "bash", script)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := startUpgradeRunner(task.ID, script); err != nil {
 		task.Status = "failed"
 		task.Stage = "start_failed"
 		task.Error = err.Error()
@@ -161,8 +195,7 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 	}
 	task.Status = "running"
 	task.Stage = "queued"
-	task.Message = "升级任务已交给宿主机后台执行，页面可继续查看日志。升级过程中面板可能短暂断开。"
-	task.UpdatedAt = time.Now().Format(time.RFC3339)
+	task.Message = "升级任务已交给独立 systemd runner 执行。API 重启不会中断升级；页面可继续刷新查看日志。"
 	_ = writeUpgradeTaskState(task)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": task.Message, "task": task})
 }
@@ -199,7 +232,51 @@ func runningUpgradeTask() bool {
 	if err != nil {
 		return false
 	}
-	return s.Status == "pending" || s.Status == "running" || s.Status == "downloading" || s.Status == "verifying" || s.Status == "backing_up" || s.Status == "installing" || s.Status == "restarting"
+	s = normalizeUpgradeTaskState(s)
+	return isActiveUpgradeStatus(s.Status) && !s.Stale
+}
+
+func isActiveUpgradeStatus(status string) bool {
+	switch status {
+	case "pending", "running", "queued", "downloading", "verifying", "backing_up", "installing", "restarting":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeUpgradeTaskState(s upgradeTaskState) upgradeTaskState {
+	if !isActiveUpgradeStatus(s.Status) {
+		return s
+	}
+	updated, err := time.Parse(time.RFC3339, s.UpdatedAt)
+	if err != nil {
+		updated, _ = time.Parse("2006-01-02T15:04:05Z", s.UpdatedAt)
+	}
+	if updated.IsZero() || time.Since(updated) <= 10*time.Minute {
+		return s
+	}
+	if versionMatchesTarget(panelVersion, s.TargetVersion) {
+		s.Status = "success"
+		s.Stage = "recovered_success"
+		s.Message = "检测到当前 API 版本已是目标版本，已自动恢复升级任务为成功。"
+		s.Error = ""
+		s.CompletedAt = time.Now().Format(time.RFC3339)
+		_ = writeUpgradeTaskState(s)
+		return s
+	}
+	s.Stale = true
+	s.StaleReason = "任务超过 10 分钟未更新，且当前 API 版本仍未变成目标版本。可能在 install.sh 重启 API 前后被中断。"
+	return s
+}
+
+func versionMatchesTarget(current, target string) bool {
+	current = strings.TrimSpace(current)
+	target = strings.TrimSpace(target)
+	if current == "" || target == "" {
+		return false
+	}
+	return current == target || strings.HasPrefix(current, target) || strings.HasPrefix(target, current)
 }
 
 func managedUpgradeSupported() bool {
@@ -217,6 +294,22 @@ func safePackageName(s string) bool {
 		return false
 	}
 	return regexp.MustCompile(`^[A-Za-z0-9._+-]+\.zip$`).MatchString(s)
+}
+
+func startUpgradeRunner(taskID, script string) error {
+	unit := "zxy-panel-upgrade-" + strings.ReplaceAll(taskID, "_", "-")
+	if commandExists("systemd-run") {
+		cmd := exec.Command("systemd-run", "--unit", unit, "--collect", "--property=Type=simple", "--property=KillMode=process", "/bin/bash", script)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		return fmt.Errorf("systemd-run failed: %s: %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	cmd := exec.Command("setsid", "bash", script)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Start()
 }
 
 func writeUpgradeRunner(task upgradeTaskState, manifestURL string) (string, error) {
@@ -237,6 +330,7 @@ MANIFEST_URL=%q
 INSTALL_DIR=%q
 CURRENT_VERSION=%q
 TARGET_VERSION=%q
+API_URL="http://127.0.0.1:8088/api/health"
 
 mkdir -p "$(dirname "$STATUS_FILE")" "$(dirname "$LOG_FILE")" "$WORK_DIR" "$BACKUP_DIR"
 exec >>"$LOG_FILE" 2>&1
@@ -271,6 +365,8 @@ if not data.get('started_at'):
     data['started_at']=data['updated_at']
 if status in ('success','failed'):
     data['completed_at']=data['updated_at']
+data.pop('stale', None)
+data.pop('stale_reason', None)
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
 PY_STATUS
@@ -290,6 +386,7 @@ echo "Start: $(date)"
 echo "Current: $CURRENT_VERSION"
 echo "Target: $TARGET_VERSION"
 echo "Package: $PKG"
+echo "Runner PID: $$"
 write_status running precheck "升级前检查中"
 
 command -v curl >/dev/null 2>&1 || fail 11 precheck "curl not found"
@@ -302,7 +399,7 @@ if [ "${free_kb:-0}" -lt 1048576 ]; then
   fail 15 precheck "磁盘可用空间不足 1GB"
 fi
 
-cd "$WORK_DIR"
+cd "$WORK_DIR" || fail 16 precheck "无法进入升级工作目录"
 rm -f "$PKG"
 write_status downloading downloading "正在下载升级包"
 echo "Downloading: $DOWNLOAD_URL"
@@ -325,11 +422,28 @@ cd "${PKG%%.zip}" || fail 32 installing "解压目录不存在"
 
 write_status installing installing "正在执行 deploy/install.sh，面板可能短暂断开"
 echo "Running deploy/install.sh"
-ZXY_UPDATE_MANIFEST_URL="$MANIFEST_URL" bash deploy/install.sh || fail 33 installing "安装脚本执行失败"
+ZXY_UPDATE_MANIFEST_URL="$MANIFEST_URL" ZXY_INSTALL_MODE=fast bash deploy/install.sh || fail 33 installing "安装脚本执行失败"
 
-write_status success success "升级完成，请刷新页面查看新版本"
-echo "Upgrade finished: $(date)"
-exit 0
+write_status restarting restarting "安装脚本完成，正在等待 API 恢复并校验版本"
+systemctl restart zxy-panel-api nginx zxy-agent >/dev/null 2>&1 || true
+
+for i in $(seq 1 90); do
+  health=$(curl -fsS --max-time 2 "$API_URL" 2>/dev/null || true)
+  if echo "$health" | grep -q "$TARGET_VERSION"; then
+    echo "API health target version verified: $TARGET_VERSION"
+    write_status success success "升级完成，当前 API 版本已切换到 $TARGET_VERSION"
+    echo "Upgrade finished: $(date)"
+    exit 0
+  fi
+  if [ $((i %% 10)) -eq 0 ]; then
+    echo "Waiting API target version... round=$i health=$health"
+  fi
+  sleep 2
+done
+
+health=$(curl -fsS --max-time 3 "$API_URL" 2>/dev/null || true)
+echo "Last API health: $health"
+fail 34 verify "安装脚本已结束，但 API health 未返回目标版本 $TARGET_VERSION"
 `, task.ID, statusPath, task.LogFile, task.WorkDir, backupDir, task.Package, task.DownloadURL, task.SHA256, manifestURL, installDir, panelVersion, task.TargetVersion)
 	if err := os.WriteFile(scriptPath, []byte(content), 0700); err != nil {
 		return "", err
@@ -348,9 +462,10 @@ func upgradePrechecks() []map[string]any {
 	add("unzip", commandExists("unzip"), "解压升级包需要 unzip")
 	add("sha256sum", commandExists("sha256sum"), "校验升级包需要 sha256sum")
 	add("systemctl", commandExists("systemctl"), "fast/systemd 托管升级需要 systemctl")
+	add("systemd-run", commandExists("systemd-run"), "托管升级将使用 systemd-run 独立运行，避免 API 重启中断任务")
 	freeOK, freeMsg := diskFreeCheck("/root", 1024*1024)
 	add("磁盘空间", freeOK, freeMsg)
-	add("任务锁", !runningUpgradeTask(), "同一时间只允许一个升级任务")
+	add("任务锁", !runningUpgradeTask(), "同一时间只允许一个升级任务；卡死任务可清理后重试")
 	return checks
 }
 
@@ -365,7 +480,6 @@ func diskFreeCheck(path string, minKB uint64) (bool, string) {
 	if len(fields) < 11 {
 		return false, strings.TrimSpace(string(out))
 	}
-	// last line: filesystem 1024-blocks used available capacity mounted
 	avail := fields[len(fields)-3]
 	var kb uint64
 	_, _ = fmt.Sscanf(avail, "%d", &kb)

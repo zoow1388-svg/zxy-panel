@@ -612,7 +612,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover { opacity:
 @media (max-width: 700px) { .policy-tabs { grid-template-columns: 1fr; } }
 [data-theme="dark"] .textarea, body .textarea { background:#101622; color:var(--text); border-color:#303747; border-radius:8px; }
 
-/* V0.7.5.8 node diagnosis center */
+/* V0.7.5.8.1 node diagnosis center */
 .diagnosis-hero { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:16px; }
 .diagnosis-hero h2 { margin:8px 0; font-size:22px; letter-spacing:-.03em; }
 .score-ring { width:108px; height:108px; border-radius:999px; display:grid; place-items:center; align-content:center; border:1px solid #303747; background:#101622; flex:0 0 auto; }

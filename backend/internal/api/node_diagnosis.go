@@ -126,7 +126,7 @@ func (r *Router) buildNodeDiagnosis() nodeDiagnosisResponse {
 			config = append(config, diagnosisItem{Key: "nginx_routes", Label: "Nginx 反代路径", Status: "ok", Message: "已包含 /api/、/sub/、/s/ 根路径反代，登录和订阅接口可正常转发。"})
 		} else {
 			config = append(config, diagnosisItem{Key: "nginx_routes", Label: "Nginx 反代路径", Status: "fail", Message: "缺少关键反代路径：" + strings.Join(missing, "、") + "。"})
-			recommendations = append(recommendations, "重新运行 V0.7.5.8 安装脚本，或修复 /etc/nginx/conf.d/zxy-panel.conf。")
+			recommendations = append(recommendations, "重新运行 V0.7.5.8.1 安装脚本，或修复 /etc/nginx/conf.d/zxy-panel.conf。")
 		}
 		if webBasePath != "" && strings.Contains(txt, "/"+webBasePath+"/") {
 			config = append(config, diagnosisItem{Key: "web_base_path", Label: "随机后台路径", Status: "ok", Message: "Nginx 已包含当前 WebBasePath：/" + webBasePath + "/。"})
@@ -146,17 +146,41 @@ func (r *Router) buildNodeDiagnosis() nodeDiagnosisResponse {
 		config = append(config, diagnosisItem{Key: "xray_config", Label: "Xray 配置文件", Status: "warn", Message: "未检测到常见 Xray 配置路径。"})
 	}
 
+	policy := model.NetworkPolicy{}
+	r.store.Mu.RLock()
+	policy = r.store.Data.NetworkPolicy
+	r.store.Mu.RUnlock()
+
+	xrayDNSMessage, xrayDNSOK := xrayDNSPolicyMessage(policy)
+	if xrayDNSOK {
+		network = append(network, diagnosisItem{Key: "xray_dns", Label: "Xray DNS 策略", Status: "ok", Message: xrayDNSMessage})
+	} else {
+		network = append(network, diagnosisItem{Key: "xray_dns", Label: "Xray DNS 策略", Status: "warn", Message: xrayDNSMessage})
+	}
+
 	resolvText, _ := os.ReadFile("/etc/resolv.conf")
 	chinaDNS := findChinaDNS(string(resolvText))
 	if len(chinaDNS) > 0 {
-		network = append(network, diagnosisItem{Key: "dns_china", Label: "系统 DNS 风险", Status: "warn", Message: "resolv.conf 中出现中国公共 DNS：" + strings.Join(chinaDNS, "、") + "。软路由或本机直连场景可能造成识别漂移。"})
-		recommendations = append(recommendations, "如遇 Gemini/Google 地区识别异常，可到 高级：网络策略 启用公共 DNS 稳定模式。")
+		msg := "宿主机 /etc/resolv.conf 中出现中国公共 DNS：" + strings.Join(chinaDNS, "、") + "。这是宿主机 DNS 注意项，不等于客户端 DNS 一定泄漏。"
+		if networkPolicyHasPublicDNSGuard(policy) {
+			msg += " 当前 Xray 网络策略已启用公共 DNS/防泄漏模式，建议再通过 browserleaks.com/dns 或 ipleak.net 做客户端确认。"
+		} else {
+			msg += " 如遇 Google/Gemini 地区识别异常，可到 高级：网络策略 启用公共 DNS 稳定模式或 DNS 防泄漏增强模式。"
+		}
+		network = append(network, diagnosisItem{Key: "host_dns", Label: "宿主机 DNS 注意", Status: "warn", Message: msg})
+		recommendations = append(recommendations, "DNS 排查要区分宿主机 DNS、Xray DNS 和客户端浏览器 DNS；宿主机出现 223.5.5.5 只代表注意项，不应直接判定节点泄漏。")
 	} else {
-		network = append(network, diagnosisItem{Key: "dns_china", Label: "系统 DNS 风险", Status: "ok", Message: "未在 /etc/resolv.conf 中发现常见中国公共 DNS。"})
+		network = append(network, diagnosisItem{Key: "host_dns", Label: "宿主机 DNS", Status: "ok", Message: "未在 /etc/resolv.conf 中发现常见中国公共 DNS。"})
 	}
 
 	if ipv6Enabled() {
-		network = append(network, diagnosisItem{Key: "ipv6", Label: "IPv6 状态", Status: "warn", Message: "系统 IPv6 当前未禁用。若客户端或软路由存在 IPv6 旁路，可能导致地区识别异常。"})
+		publicIPv6 := detectPublicIPv6()
+		if publicIPv6 != "" {
+			network = append(network, diagnosisItem{Key: "ipv6", Label: "IPv6 旁路风险", Status: "fail", Message: "检测到本机存在公网 IPv6 出口：" + publicIPv6 + "。若客户端或软路由也存在 IPv6，可能造成地区识别异常。"})
+			recommendations = append(recommendations, "如客户使用软路由或移动网络，建议在客户端打开 ipleak.net 确认是否出现 IPv6 出口。")
+		} else {
+			network = append(network, diagnosisItem{Key: "ipv6", Label: "IPv6 状态", Status: "warn", Message: "系统 IPv6 未禁用，但本机未检测到公网 IPv6 出口。这里只是注意项，客户端仍需通过 ipleak.net 确认。"})
+		}
 	} else {
 		network = append(network, diagnosisItem{Key: "ipv6", Label: "IPv6 状态", Status: "ok", Message: "系统 IPv6 显示为禁用或不可用。"})
 	}
@@ -186,7 +210,7 @@ func (r *Router) buildNodeDiagnosis() nodeDiagnosisResponse {
 		clients = append(clients, c)
 	}
 	landingExits := len(r.store.Data.LandingExits)
-	policy := r.store.Data.NetworkPolicy
+	policy = r.store.Data.NetworkPolicy
 	r.store.Mu.RUnlock()
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].CreatedAt.Before(nodes[j].CreatedAt) })
@@ -261,7 +285,7 @@ func (r *Router) buildNodeDiagnosis() nodeDiagnosisResponse {
 			warn++
 		}
 	}
-	score := 100 - fail*20 - warn*6
+	score := 100 - fail*22 - warn*3
 	if score < 0 {
 		score = 0
 	}
@@ -317,13 +341,24 @@ func renderNodeDiagnosisReport(resp nodeDiagnosisResponse) string {
 func writeDiagnosisSection(b *strings.Builder, title string, items []diagnosisItem) {
 	b.WriteString(title + "\n")
 	if len(items) == 0 {
-		b.WriteString("- [WARN] 暂无检测项。\n\n")
+		b.WriteString("- [注意] 暂无检测项。\n\n")
 		return
 	}
 	for _, item := range items {
-		b.WriteString(fmt.Sprintf("- [%s] %s：%s\n", strings.ToUpper(item.Status), item.Label, item.Message))
+		b.WriteString(fmt.Sprintf("- [%s] %s：%s\n", diagnosisStatusLabel(item.Status), item.Label, item.Message))
 	}
 	b.WriteString("\n")
+}
+
+func diagnosisStatusLabel(status string) string {
+	switch status {
+	case "ok":
+		return "正常"
+	case "fail":
+		return "风险"
+	default:
+		return "注意"
+	}
 }
 
 func serviceCheck(name, label string) diagnosisItem {
@@ -427,6 +462,60 @@ func ipv6Enabled() bool {
 		return false
 	}
 	return strings.TrimSpace(string(raw)) == "0"
+}
+
+func xrayDNSPolicyMessage(policy model.NetworkPolicy) (string, bool) {
+	dns := strings.Join(policy.DNSServers, " / ")
+	if dns == "" {
+		dns = "未配置，可能跟随默认"
+	}
+	mode := firstNonEmptyDiag(policy.Mode, "compat")
+	if policy.PublicDNS && len(policy.DNSServers) > 0 {
+		return "当前网络策略模式：" + mode + "；Xray DNS：" + dns + "；查询策略：" + firstNonEmptyDiag(policy.QueryStrategy, "AsIs") + "。", true
+	}
+	return "当前网络策略模式：" + mode + "；Xray DNS：" + dns + "。如遇地区识别异常，可优先启用公共 DNS 稳定模式。", false
+}
+
+func networkPolicyHasPublicDNSGuard(policy model.NetworkPolicy) bool {
+	mode := strings.TrimSpace(policy.Mode)
+	if mode == "dns_leak_guard" || mode == "strict" || mode == "strict_leak_guard" {
+		return true
+	}
+	if !policy.PublicDNS {
+		return false
+	}
+	need := map[string]bool{"1.1.1.1": false, "8.8.8.8": false, "9.9.9.9": false}
+	for _, dns := range policy.DNSServers {
+		dns = strings.TrimSpace(dns)
+		if _, ok := need[dns]; ok {
+			need[dns] = true
+		}
+	}
+	return need["1.1.1.1"] || need["8.8.8.8"] || need["9.9.9.9"]
+}
+
+func detectPublicIPv6() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api64.ipify.org", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "ZXY-Panel/"+panelVersion)
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64), 256)
+	if scanner.Scan() {
+		ip := strings.TrimSpace(scanner.Text())
+		if net.ParseIP(ip) != nil && strings.Contains(ip, ":") {
+			return ip
+		}
+	}
+	return ""
 }
 
 func detectPublicIPv4() string {

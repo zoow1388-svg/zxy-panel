@@ -50,6 +50,7 @@ func NewRouter(s *store.Store) http.Handler {
 	mux.HandleFunc("/api/updates/tasks/latest", r.withAuth(r.updateTaskLatest))
 	mux.HandleFunc("/api/updates/tasks/logs", r.withAuth(r.updateTaskLogs))
 	mux.HandleFunc("/api/updates/tasks/precheck", r.withAuth(r.updateTaskPrecheck))
+	mux.HandleFunc("/api/updates/tasks/clear-stale", r.withAuth(r.updateTaskClearStale))
 	mux.HandleFunc("/api/updates/tasks", r.withAuth(r.updateTaskCreate))
 	mux.HandleFunc("/api/network-policy", r.withAuth(r.networkPolicy))
 	mux.HandleFunc("/api/network-policy/preview", r.withAuth(r.networkPolicyPreview))

@@ -17,7 +17,7 @@ const error = ref('')
 let timer: number | undefined
 
 function isRunning(t: any) {
-  return ['pending', 'running', 'downloading', 'verifying', 'backing_up', 'installing', 'restarting'].includes(t?.status)
+  return ['pending', 'running', 'queued', 'downloading', 'verifying', 'backing_up', 'installing', 'restarting'].includes(t?.status) && !t?.stale
 }
 
 async function loadStatus() {
@@ -128,6 +128,27 @@ async function loadLogs() {
   }
 }
 
+async function clearStaleTask() {
+  if (!confirm('确认清理卡死升级任务吗？该操作只会把任务标记为 failed，日志和备份都会保留。')) return
+  taskLoading.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const res = await api('/api/updates/tasks/clear-stale', { method: 'POST', body: '{}' })
+    if (res?.ok === false) {
+      error.value = res?.message || '清理卡死任务失败'
+    } else {
+      task.value = res.task || task.value
+      message.value = res?.message || '卡死任务已清理'
+      await loadLogs()
+    }
+  } catch (e:any) {
+    error.value = e?.message || '清理卡死任务失败'
+  } finally {
+    taskLoading.value = false
+  }
+}
+
 function startPolling() {
   if (timer) window.clearInterval(timer)
   timer = window.setInterval(async () => {
@@ -150,7 +171,7 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
   <div class="page-head">
     <div>
       <h1 class="page-title">系统升级</h1>
-      <p class="page-desc">V0.7.5.8 托管升级中心：支持后台创建升级任务、查看日志，并保留复制命令作为兜底方案。</p>
+      <p class="page-desc">V0.7.5.8.1 托管升级中心：改用独立 systemd runner，API 重启不会中断升级，并支持识别/清理卡死任务。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="loadStatus">刷新状态</button>
@@ -193,7 +214,10 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
     <div v-if="task" class="config-preview">
       <div class="row-between">
         <strong>最新升级任务</strong>
-        <button class="btn secondary" @click="loadTask">刷新任务</button>
+        <div class="head-actions">
+          <button v-if="task.stale" class="btn secondary" :disabled="taskLoading" @click="clearStaleTask">清理卡死任务</button>
+          <button class="btn secondary" @click="loadTask">刷新任务</button>
+        </div>
       </div>
       <div class="cards diag-cards">
         <div class="card"><div class="label">状态</div><div class="value small">{{ task.status }}</div></div>
@@ -201,7 +225,10 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
         <div class="card"><div class="label">目标版本</div><div class="value small">{{ task.target_version }}</div></div>
         <div class="card"><div class="label">升级包</div><div class="value small code">{{ task.package }}</div></div>
       </div>
-      <div class="notice" :class="task.status === 'success' ? 'success' : (task.status === 'failed' ? 'warn' : '')">
+      <div v-if="task.stale" class="notice warn">
+        任务可能已中断：{{ task.stale_reason || '超过 10 分钟没有更新状态' }}。可以先查看日志，再点击“清理卡死任务”。
+      </div>
+      <div class="notice" :class="task.status === 'success' ? 'success' : (task.status === 'failed' || task.stale ? 'warn' : '')">
         {{ task.message || task.error || '任务状态已更新' }}
       </div>
       <pre class="code pre-wrap" v-if="taskLogs">{{ taskLogs }}</pre>

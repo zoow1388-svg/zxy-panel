@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.5.8-node-diagnosis-center-agent-xray"
+VERSION="0.7.5.8.1-diagnosis-polish-upgrade-fix-agent-xray"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"

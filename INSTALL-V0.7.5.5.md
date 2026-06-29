@@ -1,4 +1,4 @@
-# ZXY Panel V0.7.5.8 Node Diagnosis
+# ZXY Panel V0.7.5.8.1 Node Diagnosis
 
 V0.7.5.5 基于 V0.7.5.3 稳定版开发，废弃 V0.7.5.4 的默认强阻断思路。
 

@@ -1,21 +1,17 @@
 {
-  "latest": "0.7.5.5-network-policy-center-agent-xray",
-  "version": "0.7.5.5",
-  "codename": "network-policy-center",
-  "package": "zxy-panel-v0.7.5.5-network-policy-center.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.5/zxy-panel-v0.7.5.5-network-policy-center.zip",
-  "sha256": "78d37fcac4efcce733d2b02d7dbf219ba38c5150793c612f57133660df872cf3",
+  "latest": "0.7.5.6-fast-install-agent-xray",
+  "version": "0.7.5.6",
+  "codename": "fast-install",
+  "package": "zxy-panel-v0.7.5.6-fast-install.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.6/zxy-panel-v0.7.5.6-fast-install.zip",
+  "sha256": "a4491392059286595c93c070a5669910914727bace8f4d03865c3e6e662a493a",
   "min_supported_version": "0.7.4",
-  "release_date": "2026-06-28",
+  "release_date": "2026-06-29",
   "changelog": [
-    "新增独立菜单：高级：网络策略",
-    "DNS、IPv6、QUIC、UDP、53 端口阻断和中国公共 DNS 阻断改为用户可选配置",
-    "升级默认保持兼容稳定模式，不自动启用强阻断，不覆盖现网策略",
-    "提供兼容稳定模式、公共 DNS 稳定模式、DNS 防泄漏增强模式、严格防泄漏模式和自定义模式",
-    "应用网络策略前支持预览，应用时备份上一次策略，并支持一键回滚",
-    "系统检测只提示 DNS 与网络策略风险，不自动修改配置",
-    "Clash Meta / sing-box 是否加入 Quad9 跟随网络策略开关",
-    "保留 V0.7.5.3 CA 证书修复和 V0.7.5.2 一键安装优化",
-    "不再采用 V0.7.5.4 的默认 DNS 强阻断策略"
+    "新增 fast/systemd 安装模式，预构建产物存在时跳过 Docker、Go、Node 和 npm 现场构建",
+    "修复 fast 模式 Nginx 路由，/api/、/sub/、/s/ 与 WebBasePath 前缀路径均可正确反代",
+    "修复 API、Agent、系统版本仍显示 0.7.5.5 的问题",
+    "保留 Docker 兼容模式和 V0.7.5.5 网络策略中心功能",
+    "保留 V0.7.5.3 CA 证书修复与 V0.7.5.2 一键安装优化"
   ]
 }

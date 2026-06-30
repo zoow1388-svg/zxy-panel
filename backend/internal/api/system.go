@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.6.0-base-stable-agent-xray"
+const panelVersion = "0.7.6.1-zip-path-install-fix-agent-xray"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {

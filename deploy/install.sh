@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.6.0-base-stable-agent-xray"
+VERSION="0.7.6.1-zip-path-install-fix-agent-xray"
 DEFAULT_UPDATE_MANIFEST_URL="https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
@@ -536,7 +536,7 @@ write_env() {
   env_set ZXY_API_ADDR "127.0.0.1:${API_PORT}"
   env_set ZXY_LOCAL_SERVER_IP "${PUBLIC_IP}"
   env_set ZXY_LOCAL_SERVER_HOST "${LOCAL_HOST}"
-  env_set ZXY_LOCAL_SERVER_NAME "本机服务器"
+  env_set ZXY_LOCAL_SERVER_NAME "Local Server"
   env_set ZXY_LOCAL_SERVER_REGION "Local"
   env_set ZXY_LOCAL_SERVER_PROVIDER "Self-hosted"
   env_set ZXY_UPDATE_MANIFEST_URL "${MANIFEST_URL_TO_WRITE}"

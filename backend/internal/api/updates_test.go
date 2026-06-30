@@ -9,10 +9,10 @@ func TestCompareVersionNumbers(t *testing.T) {
 		current string
 		want    int
 	}{
-		{"0.7.6.0-base-stable-agent-xray", "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", 1},
-		{"0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", "0.7.6.0-base-stable-agent-xray", -1},
-		{"0.7.6.0", "0.7.6", 0},
-		{"v0.7.6.1", "0.7.6.0-base-stable-agent-xray", 1},
+		{"0.7.6.1-zip-path-install-fix-agent-xray", "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", 1},
+		{"0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", "0.7.6.1-zip-path-install-fix-agent-xray", -1},
+		{"0.7.6.1", "0.7.6", 1},
+		{"v0.7.6.1", "0.7.6.1-zip-path-install-fix-agent-xray", 0},
 	}
 	for _, tt := range tests {
 		got, ok := compareVersionNumbers(tt.remote, tt.current)
@@ -30,11 +30,11 @@ func TestUpgradeAllowedMessageRejectsDowngrade(t *testing.T) {
 	if ok {
 		t.Fatal("older remote version should not be allowed as an upgrade")
 	}
-	ok, _ = upgradeAllowedMessage("0.7.6.0-base-stable-agent-xray")
+	ok, _ = upgradeAllowedMessage("0.7.6.1-zip-path-install-fix-agent-xray")
 	if ok {
 		t.Fatal("equal remote version should not generate an upgrade command")
 	}
-	ok, _ = upgradeAllowedMessage("0.7.6.1-upgrade-version-compare-fix-agent-xray")
+	ok, _ = upgradeAllowedMessage("0.7.6.2-next-fix-agent-xray")
 	if !ok {
 		t.Fatal("newer remote version should be allowed as an upgrade")
 	}

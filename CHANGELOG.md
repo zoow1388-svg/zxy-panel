@@ -1,11 +1,11 @@
 # CHANGELOG
 
-## V0.7.6.0 base-stable
+## V0.7.6.1 zip-path-install-fix
 
 - 修复安装完成后 `/opt/zxy-panel/.env` 未默认写入 `ZXY_UPDATE_MANIFEST_URL` 的问题。
 - 安装脚本会更新或追加 `ZXY_UPDATE_MANIFEST_URL=https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json`，并保留 `.env` 其它已有配置。
 - 修复系统升级中心版本比较逻辑，改为按数字版本段比较。
-- `0.7.6.0` 会正确大于 `0.7.5.9.1`，远程版本低于或等于当前版本时显示“当前已是最新版本”。
+- `0.7.6.1` 会正确大于 `0.7.5.9.1`，远程版本低于或等于当前版本时显示“当前已是最新版本”。
 - 禁止系统升级页为旧版本生成降级命令，托管升级任务也不会把旧版本当成新版本。
 - 修复 Agent 空闲状态反复下发配置导致 Xray 周期性重启的问题。
 - 修复客户管理编辑按钮，可以修改客户名称、禁用客户、启用客户。

@@ -1,19 +1,17 @@
 {
-  "latest": "0.7.6.0-base-stable-agent-xray",
-  "version": "0.7.6.0",
-  "codename": "base-stable",
-  "package": "zxy-panel-v0.7.6.0-base-stable.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.0/zxy-panel-v0.7.6.0-base-stable.zip",
-  "sha256": "8f331304fb929183413f503be0526ad1379f9b99710a72881d6028680e1a78f6",
+  "latest": "0.7.6.1-zip-path-install-fix-agent-xray",
+  "version": "0.7.6.1",
+  "codename": "zip-path-install-fix",
+  "package": "zxy-panel-v0.7.6.1-zip-path-install-fix.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.1/zxy-panel-v0.7.6.1-zip-path-install-fix.zip",
+  "sha256": "ecba9ac9baeb0003b64aac4887f0308665a54448f5dcf902d0f71f1875b8aeed",
   "min_supported_version": "0.7.5",
   "released_at": "2026-07-01T00:00:00+08:00",
   "changelog": [
-    "修复安装脚本默认写入 ZXY_UPDATE_MANIFEST_URL",
-    "安装时更新或追加 ZXY_UPDATE_MANIFEST_URL，并保留 .env 其它已有配置",
-    "修复系统升级中心版本比较逻辑，按数字版本段判断新旧",
-    "远程版本低于或等于当前版本时显示当前已是最新版本，并禁止生成降级命令",
-    "修复 Agent 空闲状态反复下发配置导致 Xray 周期性重启的问题",
-    "修复客户管理编辑按钮和 WebBasePath 下前端路由刷新空白问题",
-    "保留 V0.7.5.9.1 的 vless:// 单节点二维码和 flow 兼容修复"
+    "Fix Windows-built release ZIP path separators so Linux unzip can extract deploy/install.sh correctly",
+    "Normalize release ZIP internal paths to forward slashes",
+    "Keep default ZXY_UPDATE_MANIFEST_URL writing during install",
+    "Keep numeric version comparison in the managed upgrade center",
+    "Keep previous stable runtime fixes, including Agent idle behavior, client editing, WebBasePath refresh, and vless QR compatibility"
   ]
 }

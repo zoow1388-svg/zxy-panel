@@ -15,11 +15,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
-const version = "0.7.6.0-base-stable-agent-xray"
+const version = "0.7.6.1-zip-path-install-fix-agent-xray"
 
 type Heartbeat struct {
 	ServerID      string  `json:"server_id"`
@@ -251,19 +250,6 @@ func memoryUsage() float64 {
 		return 0
 	}
 	return round2((total - avail) * 100 / total)
-}
-
-func diskUsage(path string) float64 {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
-		return 0
-	}
-	total := float64(st.Blocks) * float64(st.Bsize)
-	free := float64(st.Bavail) * float64(st.Bsize)
-	if total <= 0 {
-		return 0
-	}
-	return round2((total - free) * 100 / total)
 }
 
 func networkTotals() (int64, int64) {

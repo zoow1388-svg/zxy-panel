@@ -71,7 +71,7 @@ onMounted(load)
 </script>
 <template>
   <div class="page-head">
-    <div><h1 class="page-title">落地出口管理</h1><p class="page-desc">V0.7.6.0：集中保存 50 台出口 IP 的 SOCKS5 参数，客户绑定出口时直接选择，避免手动反复填写。</p></div>
+    <div><h1 class="page-title">落地出口管理</h1><p class="page-desc">V0.7.6.1：集中保存 50 台出口 IP 的 SOCKS5 参数，客户绑定出口时直接选择，避免手动反复填写。</p></div>
     <div class="head-actions"><button class="btn secondary" @click="showBulk=true">批量导入</button><button class="btn" @click="openCreate">新增落地出口</button></div>
   </div>
   <div class="notice ok">推荐模式：一个客户绑定一条中转线路和一个固定出口 IP。不要把多个出口做成随机池，跨境账号更需要固定出口。</div>

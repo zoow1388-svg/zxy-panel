@@ -68,7 +68,7 @@ onMounted(runDiagnosis)
   <div class="page-head">
     <div>
       <h1 class="page-title">节点诊断与一键体检中心</h1>
-      <p class="page-desc">V0.7.6.0：区分宿主机 DNS、Xray DNS 与客户端 DNS，DNS/IPv6 注意项不再直接等同节点泄漏。</p>
+      <p class="page-desc">V0.7.6.1：区分宿主机 DNS、Xray DNS 与客户端 DNS，DNS/IPv6 注意项不再直接等同节点泄漏。</p>
     </div>
     <div class="head-actions">
       <button class="btn secondary" @click="copyReport" :disabled="copying || loading">{{ copying ? '生成中...' : '复制诊断报告' }}</button>

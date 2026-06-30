@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.6.0}"
-CODENAME="base-stable"
+VERSION="${1:-0.7.6.1}"
+CODENAME="${2:-zip-path-install-fix}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -11,7 +11,14 @@ PKG_PATH="$OUT_DIR/$PKG_NAME"
 export CGO_ENABLED=0
 
 command -v go >/dev/null 2>&1 || { echo "ERROR: go not found"; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "ERROR: npm not found"; exit 1; }
+if command -v npm.cmd >/dev/null 2>&1; then
+  NPM_BIN="$(command -v npm.cmd)"
+elif command -v npm >/dev/null 2>&1; then
+  NPM_BIN="$(command -v npm)"
+else
+  echo "ERROR: npm not found"
+  exit 1
+fi
 if ! command -v rsync >/dev/null 2>&1 && ! command -v tar >/dev/null 2>&1; then
   echo "ERROR: rsync not found and tar fallback is unavailable"
   exit 1
@@ -33,13 +40,14 @@ echo "[2/5] Building agent binary"
 chmod +x "$ROOT_DIR/bin/zxy-agent-linux-amd64"
 
 echo "[3/5] Building frontend dist"
-(cd "$ROOT_DIR/frontend" && npm ci --no-audit --no-fund --progress=false && VITE_BASE_PATH=/ npm run build)
+(cd "$ROOT_DIR/frontend" && "$NPM_BIN" ci --no-audit --no-fund --progress=false && VITE_BASE_PATH=/ "$NPM_BIN" run build)
 
 echo "[4/5] Packaging fast release"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 PKG_ROOT="$TMP_DIR/zxy-panel-v${VERSION}-${CODENAME}"
 mkdir -p "$PKG_ROOT"
+
 EXCLUDES=(
   --exclude '.git'
   --exclude '.github'
@@ -75,7 +83,34 @@ if command -v zip >/dev/null 2>&1; then
 else
   WIN_ROOT="$(cygpath -w "$PKG_ROOT")"
   WIN_DEST="$(cygpath -w "$PKG_PATH")"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -LiteralPath '$WIN_ROOT' -DestinationPath '$WIN_DEST' -Force" >/dev/null
+  PS_ZIP_SCRIPT="$TMP_DIR/create-release-zip.ps1"
+  WIN_PS_ZIP_SCRIPT="$(cygpath -w "$PS_ZIP_SCRIPT")"
+  cat > "$PS_ZIP_SCRIPT" <<'PS'
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+$root = $env:ZXY_ZIP_ROOT
+$dest = $env:ZXY_ZIP_DEST
+$rootName = [IO.Path]::GetFileName($root)
+
+if (Test-Path -LiteralPath $dest) {
+  Remove-Item -LiteralPath $dest -Force
+}
+
+$zip = [System.IO.Compression.ZipFile]::Open($dest, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+  Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+    $rel = $_.FullName.Substring($root.Length).TrimStart([IO.Path]::DirectorySeparatorChar).TrimStart([IO.Path]::AltDirectorySeparatorChar)
+    $entry = $rootName + '/' + $rel.Replace('\', '/')
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+  }
+}
+finally {
+  $zip.Dispose()
+}
+PS
+  ZXY_ZIP_ROOT="$WIN_ROOT" ZXY_ZIP_DEST="$WIN_DEST" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$WIN_PS_ZIP_SCRIPT" >/dev/null
 fi
 
 SHA256="$(sha256sum "$PKG_PATH" | awk '{print $1}')"
@@ -91,12 +126,10 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "release_date": "$(date +%F)",
   "changelog": [
-    "修复安装脚本默认写入 ZXY_UPDATE_MANIFEST_URL",
-    "修复系统升级中心版本比较逻辑，按数字版本段判断新旧",
-    "远程版本低于或等于当前版本时显示当前已是最新版本，并禁止生成降级命令",
-    "修复 Agent 空闲状态反复下发配置导致 Xray 周期性重启的问题",
-    "修复客户管理编辑按钮和 WebBasePath 下前端路由刷新空白问题",
-    "保留 V0.7.5.9.1 的 vless:// 单节点二维码和 flow 兼容修复"
+    "Fix Windows-built release ZIP entries so Linux unzip can extract install paths correctly",
+    "Normalize release ZIP entry names to forward slash paths",
+    "Keep the default ZXY_UPDATE_MANIFEST_URL write and numeric upgrade version comparison fixes",
+    "Keep the stable Agent idle behavior, client edit, WebBasePath refresh, and vless QR fixes"
   ]
 }
 JSON

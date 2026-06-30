@@ -33,13 +33,13 @@ elapsed() {
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    die "请使用 root 用户执行，或通过 sudo 执行安装命令"
+    die "Please run as root or with sudo."
   fi
 }
 
 detect_os() {
   if [ ! -r /etc/os-release ]; then
-    die "无法识别系统版本，当前仅优先支持 Ubuntu 22.04 / Debian 12"
+    die "Cannot detect OS. Ubuntu and Debian are recommended."
   fi
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -47,13 +47,13 @@ detect_os() {
   OS_VERSION="${VERSION_ID:-unknown}"
   case "${OS_ID}:${OS_VERSION}" in
     ubuntu:22.04|debian:12)
-      log "系统检测通过：${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}"
+      log "OS check passed: ${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}"
       ;;
     ubuntu:*|debian:*)
-      log "检测到 ${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}，将按兼容模式继续"
+      log "Detected ${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}. Continuing in compatibility mode."
       ;;
     *)
-      die "当前系统为 ${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}，请优先使用 Ubuntu 22.04 / Debian 12"
+      die "Unsupported OS: ${PRETTY_NAME:-${OS_ID} ${OS_VERSION}}. Ubuntu or Debian is recommended."
       ;;
   esac
 }
@@ -76,11 +76,11 @@ install_dependencies() {
   fi
 
   if [ "${#missing[@]}" -eq 0 ]; then
-    log "基础依赖已存在，跳过依赖安装"
+    log "Base dependencies already exist. Skipping dependency install."
     return
   fi
 
-  log "安装缺失依赖：${missing[*]}"
+  log "Installing missing dependencies: ${missing[*]}"
   if command -v apt-get >/dev/null 2>&1; then
     apt_update_once
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
@@ -94,7 +94,7 @@ install_dependencies() {
     yum install -y "${missing[@]}"
     return
   fi
-  die "未找到支持的包管理器，请手动安装 unzip curl ca-certificates tar gzip"
+  die "No supported package manager found. Install unzip curl ca-certificates tar gzip manually."
 }
 
 json_value() {
@@ -107,22 +107,22 @@ validate_manifest_field() {
   local name="$1"
   local value="$2"
   if [ -z "${value}" ]; then
-    die "version.json 缺少字段：${name}"
+    die "version.json is missing field: ${name}"
   fi
 }
 
 validate_sha256() {
   local sha256="$1"
   if ! printf '%s' "${sha256}" | grep -Eq '^[a-fA-F0-9]{64}$'; then
-    die "version.json 中的 sha256 尚未配置为真实 64 位校验值"
+    die "version.json sha256 is not a valid 64-character SHA256 value."
   fi
 }
 
 fetch_manifest() {
   MANIFEST_FILE="${WORK_DIR}/version.json"
-  log "读取版本清单：${MANIFEST_URL}"
+  log "Fetching version manifest: ${MANIFEST_URL}"
   curl -fL --connect-timeout 10 --retry 3 -o "${MANIFEST_FILE}" "${MANIFEST_URL}" \
-    || die "无法下载版本清单"
+    || die "Failed to download version manifest."
 
   PACKAGE_NAME="$(json_value package "${MANIFEST_FILE}")"
   VERSION="$(json_value version "${MANIFEST_FILE}")"
@@ -138,20 +138,20 @@ fetch_manifest() {
 
 download_release() {
   PACKAGE_FILE="${WORK_DIR}/${PACKAGE_NAME}"
-  log "下载稳定包：${DOWNLOAD_URL}"
+  log "Downloading release package: ${DOWNLOAD_URL}"
   curl -fL --connect-timeout 10 --retry 3 -o "${PACKAGE_FILE}" "${DOWNLOAD_URL}" \
-    || die "无法下载稳定包"
+    || die "Failed to download release package."
 
-  log "校验 SHA256"
+  log "Verifying SHA256"
   (cd "${WORK_DIR}" && printf '%s  %s\n' "${SHA256}" "${PACKAGE_NAME}" | sha256sum -c -) \
-    || die "SHA256 校验失败，已停止安装"
+    || die "SHA256 verification failed. Installation stopped."
 }
 
 extract_release() {
   RELEASE_ROOT="${INSTALL_ROOT}/${APP_NAME}-${VERSION}"
   rm -rf "${RELEASE_ROOT}"
   mkdir -p "${RELEASE_ROOT}"
-  log "解压到：${RELEASE_ROOT}"
+  log "Extracting to: ${RELEASE_ROOT}"
   unzip -q -o "${PACKAGE_FILE}" -d "${RELEASE_ROOT}"
 
   if [ -f "${RELEASE_ROOT}/deploy/install.sh" ]; then
@@ -163,11 +163,11 @@ extract_release() {
   deploy_install="$(find "${RELEASE_ROOT}" -maxdepth 4 -type f -path '*/deploy/install.sh' -print -quit)"
   if [ -n "${deploy_install}" ]; then
     RELEASE_DIR="$(cd "$(dirname "${deploy_install}")/.." && pwd)"
-    log "检测到嵌套发布目录：${RELEASE_DIR}"
+    log "Detected nested release directory: ${RELEASE_DIR}"
     return
   fi
 
-  die "稳定包中未找到 deploy/install.sh"
+  die "deploy/install.sh was not found in the release package."
 }
 
 detect_public_ip() {
@@ -229,7 +229,7 @@ panel_access_url() {
 
 run_deploy_install() {
   chmod +x "${RELEASE_DIR}/deploy/install.sh"
-  log "执行部署脚本"
+  log "Running deploy/install.sh"
   export ZXY_UPDATE_MANIFEST_URL="${MANIFEST_URL}"
   (cd "${RELEASE_DIR}" && bash deploy/install.sh)
 }
@@ -239,25 +239,23 @@ print_finish_info() {
   access_url="$(panel_access_url)"
   port="$(panel_port)"
 
-  cat <<'FINISH_HEAD'
+  cat <<FINISH
 
-ZXY Panel 安装流程已完成。
-
-常用命令：
+ZXY Panel install flow finished.
+Common commands:
   zxy-panel info
   zxy-panel status
   zxy-panel logs
 
-面板访问地址：
-FINISH_HEAD
-  echo "  ${access_url}"
-  cat <<FINISH_TAIL
+Panel access URL:
+  ${access_url}
 
-请在服务器安全组 / 防火墙中放行面板端口：${port}
-如使用中转入口、落地出口或 Agent 通信端口，也需要按实际配置放行。
+Security group / firewall reminder:
+  Open panel port: ${port}
+  Also open any relay entry, landing exit, or Agent communication ports required by your deployment.
 
-安装耗时：$(elapsed)
-FINISH_TAIL
+Elapsed: $(elapsed)
+FINISH
 }
 
 main() {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"time"
 
 	"zxy-panel/backend/internal/model"
@@ -235,6 +236,9 @@ func makeRelayVlessClients(clients []model.Client, relayID string) []map[string]
 			boundClients = append(boundClients, map[string]any{"id": c.UUID, "email": c.Username, "flow": ""})
 		}
 	}
+	sort.SliceStable(boundClients, func(i, j int) bool {
+		return clientSortKey(boundClients[i]) < clientSortKey(boundClients[j])
+	})
 	return boundClients
 }
 
@@ -253,7 +257,20 @@ func makeVlessClients(clients []model.Client, nodeID string) []map[string]any {
 		}
 		boundClients = append(boundClients, map[string]any{"id": c.UUID, "email": c.Username, "flow": ""})
 	}
+	sort.SliceStable(boundClients, func(i, j int) bool {
+		return clientSortKey(boundClients[i]) < clientSortKey(boundClients[j])
+	})
 	return boundClients
+}
+
+func clientSortKey(c map[string]any) string {
+	if email, ok := c["email"].(string); ok && email != "" {
+		return email
+	}
+	if id, ok := c["id"].(string); ok {
+		return id
+	}
+	return ""
 }
 
 func applyRealitySettings(stream map[string]any, dest, serverName, privateKey, shortID, spiderX string) {
@@ -309,8 +326,10 @@ func dnsConfigFromPolicy(policy model.NetworkPolicy) map[string]any {
 	policy = normalizeNetworkPolicy(policy)
 	dns := map[string]any{}
 	if policy.PublicDNS || len(policy.DNSServers) > 0 {
+		dnsServers := append([]string(nil), policy.DNSServers...)
+		sort.Strings(dnsServers)
 		servers := []any{}
-		for _, s := range policy.DNSServers {
+		for _, s := range dnsServers {
 			if s != "" {
 				servers = append(servers, s)
 			}

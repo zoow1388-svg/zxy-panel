@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -83,13 +84,16 @@ func (r *Router) updateCheck(w http.ResponseWriter, req *http.Request) {
 	if latest == "" {
 		latest = manifest.Version
 	}
+	cmp, comparable := compareVersionNumbers(latest, panelVersion)
+	updateAvailable := comparable && cmp > 0
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"current_version":  panelVersion,
 		"latest_version":   latest,
-		"update_available": latest != "" && latest != panelVersion,
+		"update_available": updateAvailable,
+		"version_compare":  cmp,
 		"manifest":         manifest,
-		"message":          updateMessage(latest),
+		"message":          versionUpdateMessage(latest),
 	})
 }
 
@@ -113,6 +117,17 @@ func (r *Router) updatePanelCommand(w http.ResponseWriter, req *http.Request) {
 		parts := strings.Split(manifest.DownloadURL, "/")
 		pkg = parts[len(parts)-1]
 	}
+	target := targetManifestVersion(manifest)
+	if ok, message := upgradeAllowedMessage(target); !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":               false,
+			"current_version":  panelVersion,
+			"target_version":   target,
+			"update_available": false,
+			"message":          message,
+		})
+		return
+	}
 	if pkg == "" || manifest.DownloadURL == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "version.json 缺少 package 或 download_url。"})
 		return
@@ -126,7 +141,7 @@ func (r *Router) updatePanelCommand(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":              true,
 		"current_version": panelVersion,
-		"target_version":  firstNonEmpty(manifest.Latest, manifest.Version),
+		"target_version":  target,
 		"package":         pkg,
 		"command":         command,
 		"message":         "为安全起见，当前版本先生成可审查升级命令。确认无误后可复制到服务器执行。后续版本会加入后台直接执行与回滚。",
@@ -206,6 +221,96 @@ func updateMessage(latest string) string {
 		return "当前面板已经是最新版本。"
 	}
 	return "发现新版本，可查看更新日志并生成升级命令。"
+}
+
+func targetManifestVersion(manifest updateManifest) string {
+	return firstNonEmpty(manifest.Latest, manifest.Version)
+}
+
+func versionUpdateMessage(latest string) string {
+	if latest == "" {
+		return "远程版本清单未提供 latest/version 字段。"
+	}
+	cmp, ok := compareVersionNumbers(latest, panelVersion)
+	if !ok {
+		return "无法识别远程版本号，已停止自动升级判断。"
+	}
+	if cmp <= 0 {
+		return "当前已是最新版本。"
+	}
+	return "发现新版本，可查看更新日志并生成升级命令。"
+}
+
+func upgradeAllowedMessage(target string) (bool, string) {
+	if strings.TrimSpace(target) == "" {
+		return false, "远程版本清单未提供目标版本，禁止生成升级命令。"
+	}
+	cmp, ok := compareVersionNumbers(target, panelVersion)
+	if !ok {
+		return false, "无法识别远程版本号，禁止生成升级命令。"
+	}
+	if cmp <= 0 {
+		return false, "当前已是最新版本，不生成降级命令。"
+	}
+	return true, ""
+}
+
+func compareVersionNumbers(remote, current string) (int, bool) {
+	rv, rok := numericVersionParts(remote)
+	cv, cok := numericVersionParts(current)
+	if !rok || !cok {
+		return 0, false
+	}
+	maxLen := len(rv)
+	if len(cv) > maxLen {
+		maxLen = len(cv)
+	}
+	for i := 0; i < maxLen; i++ {
+		r, c := 0, 0
+		if i < len(rv) {
+			r = rv[i]
+		}
+		if i < len(cv) {
+			c = cv[i]
+		}
+		if r > c {
+			return 1, true
+		}
+		if r < c {
+			return -1, true
+		}
+	}
+	return 0, true
+}
+
+func numericVersionParts(version string) ([]int, bool) {
+	s := strings.TrimSpace(version)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
+	var b strings.Builder
+	for _, ch := range s {
+		if (ch >= '0' && ch <= '9') || ch == '.' {
+			b.WriteRune(ch)
+			continue
+		}
+		break
+	}
+	numeric := strings.Trim(b.String(), ".")
+	if numeric == "" {
+		return nil, false
+	}
+	raw := strings.Split(numeric, ".")
+	parts := make([]int, 0, len(raw))
+	for _, item := range raw {
+		if item == "" {
+			return nil, false
+		}
+		n, err := strconv.Atoi(item)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, n)
+	}
+	return parts, len(parts) > 0
 }
 
 func shellEscape(s string) string    { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

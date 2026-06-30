@@ -103,6 +103,9 @@ function fmtTime(v:string) {
 
 function editClient(c:any) {
   editingId.value = c.id
+  showAdvancedClientForm.value = true
+  closeDetail()
+  closeShare()
   form.value = {
     username: c.username || '',
     email: c.email || '',
@@ -114,7 +117,7 @@ function editClient(c:any) {
     uuid: c.uuid,
     subscribe_token: c.subscribe_token,
   }
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50)
 }
 
 function randomRelayPort() { return Math.floor(10000 + Math.random() * 50000) }
@@ -314,7 +317,7 @@ onMounted(load)
 </script>
 <template>
   <div v-if="copyToast" class="copy-toast">{{ copyToast }}</div>
-  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.5.9.1 客户管理 UI 清理版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.6.0 客户管理稳定版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
 
   <div class="client-summary-grid">
     <div class="client-summary-card"><span>客户总数</span><strong>{{ clientStats.total }}</strong></div>

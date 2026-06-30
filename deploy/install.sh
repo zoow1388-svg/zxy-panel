@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.5.9.1-qr-flow-compatibility-fix-agent-xray"
+VERSION="0.7.6.0-base-stable-agent-xray"
+DEFAULT_UPDATE_MANIFEST_URL="https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"
@@ -523,24 +524,50 @@ copy_package_files() {
 }
 
 write_env() {
-  cat > .env <<EOF_ENV
-API_PORT=${API_PORT}
-WEB_PORT=${WEB_PORT}
-WEB_BASE_PATH=${WEB_BASE_PATH}
-ZXY_JWT_SECRET=${JWT_SECRET}
-ZXY_AGENT_SHARED_SECRET=${AGENT_SECRET}
-ZXY_ADMIN_USERNAME=${ADMIN_USERNAME}
-ZXY_ADMIN_PASSWORD=${ADMIN_PASSWORD}
-ZXY_DB_PATH=${APP_DIR}/data/zxy-panel.json
-ZXY_API_ADDR=127.0.0.1:${API_PORT}
-ZXY_LOCAL_SERVER_IP=${PUBLIC_IP}
-ZXY_LOCAL_SERVER_HOST=${LOCAL_HOST}
-ZXY_LOCAL_SERVER_NAME=本机服务器
-ZXY_LOCAL_SERVER_REGION=Local
-ZXY_LOCAL_SERVER_PROVIDER=Self-hosted
-ZXY_UPDATE_MANIFEST_URL=${MANIFEST_URL_TO_WRITE}
-EOF_ENV
+  touch .env
+  env_set API_PORT "${API_PORT}"
+  env_set WEB_PORT "${WEB_PORT}"
+  env_set WEB_BASE_PATH "${WEB_BASE_PATH}"
+  env_set ZXY_JWT_SECRET "${JWT_SECRET}"
+  env_set ZXY_AGENT_SHARED_SECRET "${AGENT_SECRET}"
+  env_set ZXY_ADMIN_USERNAME "${ADMIN_USERNAME}"
+  env_set ZXY_ADMIN_PASSWORD "${ADMIN_PASSWORD}"
+  env_set ZXY_DB_PATH "${APP_DIR}/data/zxy-panel.json"
+  env_set ZXY_API_ADDR "127.0.0.1:${API_PORT}"
+  env_set ZXY_LOCAL_SERVER_IP "${PUBLIC_IP}"
+  env_set ZXY_LOCAL_SERVER_HOST "${LOCAL_HOST}"
+  env_set ZXY_LOCAL_SERVER_NAME "本机服务器"
+  env_set ZXY_LOCAL_SERVER_REGION "Local"
+  env_set ZXY_LOCAL_SERVER_PROVIDER "Self-hosted"
+  env_set ZXY_UPDATE_MANIFEST_URL "${MANIFEST_URL_TO_WRITE}"
   chmod 600 .env
+}
+
+env_set() {
+  local key="$1"
+  local value="$2"
+  KEY="$key" VALUE="$value" FILE=".env" python3 <<'PY_ENV_SET'
+import os
+from pathlib import Path
+
+key = os.environ["KEY"]
+value = os.environ.get("VALUE", "")
+path = Path(os.environ["FILE"])
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+prefix = key + "="
+written = False
+out = []
+for line in lines:
+    if line.startswith(prefix):
+        if not written:
+            out.append(prefix + value)
+            written = True
+        continue
+    out.append(line)
+if not written:
+    out.append(prefix + value)
+path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+PY_ENV_SET
 }
 
 start_fast_runtime() {
@@ -643,7 +670,7 @@ main() {
   ADMIN_PASSWORD_DISPLAY="$ADMIN_PASSWORD"
   JWT_SECRET=$(random_string 64)
   AGENT_SECRET=${EXISTING_AGENT_SECRET:-$(random_string 64)}
-  MANIFEST_URL_TO_WRITE=${ZXY_UPDATE_MANIFEST_URL:-${EXISTING_MANIFEST_URL:-}}
+  MANIFEST_URL_TO_WRITE=${ZXY_UPDATE_MANIFEST_URL:-${DEFAULT_UPDATE_MANIFEST_URL}}
 
   step "Preparing directories"
   mkdir -p "$APP_DIR" "$APP_DIR/backups" "$CONFIG_DIR"

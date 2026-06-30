@@ -1,4 +1,6 @@
-const BASE_PATH = import.meta.env.BASE_URL || '/'
+import { runtimeBasePath } from './runtimeBase'
+
+const BASE_PATH = runtimeBasePath()
 const DEFAULT_API_BASE = BASE_PATH.replace(/\/$/, '')
 const API_BASE = import.meta.env.VITE_API_BASE || DEFAULT_API_BASE
 

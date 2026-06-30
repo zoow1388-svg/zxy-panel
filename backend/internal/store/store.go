@@ -77,7 +77,7 @@ func (s *Store) loadOrInit() error {
 
 func newData() model.PanelData {
 	return model.PanelData{
-		Version:       "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray",
+		Version:       "0.7.6.0-base-stable-agent-xray",
 		Admins:        map[string]model.AdminUser{},
 		Servers:       map[string]model.Server{},
 		Nodes:         map[string]model.Node{},
@@ -124,7 +124,7 @@ func normalize(d *model.PanelData) {
 			}
 		}
 	}
-	d.Version = "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray"
+	d.Version = "0.7.6.0-base-stable-agent-xray"
 }
 
 func defaultNetworkPolicy() model.NetworkPolicy {
@@ -308,7 +308,7 @@ func shouldReplaceLocalEndpoint(current, target string) bool {
 func pickLocalServer(list []model.Server) model.Server {
 	keep := list[0]
 	for _, srv := range list[1:] {
-		if srv.AgentVersion == "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray" && keep.AgentVersion != "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray" {
+		if srv.AgentVersion == "0.7.6.0-base-stable-agent-xray" && keep.AgentVersion != "0.7.6.0-base-stable-agent-xray" {
 			keep = srv
 			continue
 		}

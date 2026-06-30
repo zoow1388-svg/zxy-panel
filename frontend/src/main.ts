@@ -15,6 +15,7 @@ import Updates from './views/Updates.vue'
 import NetworkPolicy from './views/NetworkPolicy.vue'
 import './style.css'
 import { APP_VERSION } from './version'
+import { runtimeBasePath } from './runtimeBase'
 
 
 const previousFrontendVersion = localStorage.getItem('zxy_frontend_version')
@@ -24,10 +25,11 @@ if (previousFrontendVersion && previousFrontendVersion !== APP_VERSION) {
 localStorage.setItem('zxy_frontend_version', APP_VERSION)
 
 const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history: createWebHistory(runtimeBasePath()),
   routes: [
     { path: '/login', component: Login },
     { path: '/', component: Dashboard },
+    { path: '/dashboard', component: Dashboard },
     { path: '/servers', component: Servers },
     { path: '/nodes', component: Nodes },
     { path: '/relays', component: Relays },

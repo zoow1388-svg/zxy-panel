@@ -143,6 +143,17 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		parts := strings.Split(manifest.DownloadURL, "/")
 		pkg = parts[len(parts)-1]
 	}
+	target := targetManifestVersion(manifest)
+	if ok, message := upgradeAllowedMessage(target); !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":               false,
+			"current_version":  panelVersion,
+			"target_version":   target,
+			"update_available": false,
+			"message":          message,
+		})
+		return
+	}
 	if pkg == "" || strings.TrimSpace(manifest.DownloadURL) == "" || strings.TrimSpace(manifest.SHA256) == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "version.json 缺少 package、download_url 或 sha256，禁止托管升级。"})
 		return
@@ -158,7 +169,7 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		Stage:          "created",
 		Message:        "升级任务已创建，等待独立 systemd runner 接管。",
 		CurrentVersion: panelVersion,
-		TargetVersion:  firstNonEmpty(manifest.Latest, manifest.Version),
+		TargetVersion:  target,
 		Package:        pkg,
 		DownloadURL:    manifest.DownloadURL,
 		SHA256:         manifest.SHA256,

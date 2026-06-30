@@ -1,17 +1,15 @@
 {
-  "latest": "0.7.5.1-update-config-agent-xray",
-  "package": "zxy-panel-v0.7.5.1-update-config.zip",
-  "version": "0.7.5.1",
-  "codename": "update-config",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.5.1/zxy-panel-v0.7.5.1-update-config.zip",
-  "sha256": "REPLACE_WITH_SHA256_AFTER_ZIP_BUILD",
-  "min_supported_version": "0.7.4",
-  "release_date": "2026-06-28",
+  "latest": "0.7.6.0-base-stable-agent-xray",
+  "version": "0.7.6.0",
+  "codename": "base-stable",
+  "package": "zxy-panel-v0.7.6.0-base-stable.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.0/zxy-panel-v0.7.6.0-base-stable.zip",
+  "sha256": "8f331304fb929183413f503be0526ad1379f9b99710a72881d6028680e1a78f6",
+  "min_supported_version": "0.7.5",
+  "released_at": "2026-07-01T00:00:00+08:00",
   "changelog": [
-    "修复系统升级页默认错误远程版本清单地址问题",
-    "未配置远程版本清单时显示未配置",
-    "网络核心版本优先读取 Agent 上报的 Xray 版本",
-    "保留固定出口客户和直连客户逻辑",
-    "保留 SOCKS5 路由中转和客户专属固定出口能力"
+    "修复安装脚本默认写入 ZXY_UPDATE_MANIFEST_URL",
+    "修复系统升级中心版本比较逻辑，按数字版本段判断新旧",
+    "远程版本低于或等于当前版本时禁止生成降级命令"
   ]
 }

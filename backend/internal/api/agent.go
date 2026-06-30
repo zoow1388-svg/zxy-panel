@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"sort"
 	"time"
 
 	"zxy-panel/backend/internal/model"
@@ -67,18 +68,36 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 			nodes = append(nodes, n)
 		}
 	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].Port != nodes[j].Port {
+			return nodes[i].Port < nodes[j].Port
+		}
+		return nodes[i].ID < nodes[j].ID
+	})
 	relays := make([]model.RelayRoute, 0)
 	for _, rr := range r.store.Data.RelayRoutes {
 		if rr.RelayServerID == body.ServerID && rr.Enabled {
 			relays = append(relays, rr)
 		}
 	}
+	sort.SliceStable(relays, func(i, j int) bool {
+		if relays[i].RelayPort != relays[j].RelayPort {
+			return relays[i].RelayPort < relays[j].RelayPort
+		}
+		return relays[i].ID < relays[j].ID
+	})
 	clients := make([]model.Client, 0)
 	for _, c := range r.store.Data.Clients {
 		if c.Enabled {
 			clients = append(clients, c)
 		}
 	}
+	sort.SliceStable(clients, func(i, j int) bool {
+		if clients[i].Username != clients[j].Username {
+			return clients[i].Username < clients[j].Username
+		}
+		return clients[i].ID < clients[j].ID
+	})
 	cfg := xray.GenerateServerConfig(nodes, clients, relays, r.store.Data.Nodes, r.store.Data.NetworkPolicy)
 	desiredHash := xray.ConfigHash(cfg)
 	server.AgentVersion = body.AgentVersion

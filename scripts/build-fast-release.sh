@@ -1,30 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.5.9.1}"
-CODENAME="qr-flow-compatibility-fix"
+VERSION="${1:-0.7.6.0}"
+CODENAME="base-stable"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
 PKG_PATH="$OUT_DIR/$PKG_NAME"
 
 export CGO_ENABLED=0
-export GOOS=linux
-export GOARCH=amd64
 
 command -v go >/dev/null 2>&1 || { echo "ERROR: go not found"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "ERROR: npm not found"; exit 1; }
-command -v zip >/dev/null 2>&1 || { echo "ERROR: zip not found"; exit 1; }
+if ! command -v rsync >/dev/null 2>&1 && ! command -v tar >/dev/null 2>&1; then
+  echo "ERROR: rsync not found and tar fallback is unavailable"
+  exit 1
+fi
+if ! command -v zip >/dev/null 2>&1 && ! command -v powershell.exe >/dev/null 2>&1; then
+  echo "ERROR: zip not found and powershell.exe fallback is unavailable"
+  exit 1
+fi
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR" "$ROOT_DIR/bin"
 
 echo "[1/5] Building backend API binary"
-(cd "$ROOT_DIR/backend" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
+(cd "$ROOT_DIR/backend" && go test ./... && GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
 chmod +x "$ROOT_DIR/bin/zxy-panel-api-linux-amd64"
 
 echo "[2/5] Building agent binary"
-(cd "$ROOT_DIR/agent" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
+(cd "$ROOT_DIR/agent" && GOOS=linux GOARCH=amd64 go test ./... && GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
 chmod +x "$ROOT_DIR/bin/zxy-agent-linux-amd64"
 
 echo "[3/5] Building frontend dist"
@@ -35,24 +40,46 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 PKG_ROOT="$TMP_DIR/zxy-panel-v${VERSION}-${CODENAME}"
 mkdir -p "$PKG_ROOT"
-rsync -a \
-  --exclude '.git' \
-  --exclude '.github' \
-  --exclude 'dist-release' \
-  --exclude 'frontend/node_modules' \
-  --exclude 'backend/tmp' \
-  --exclude 'agent/tmp' \
-  --exclude '*.tsbuildinfo' \
-  "$ROOT_DIR/" "$PKG_ROOT/"
+EXCLUDES=(
+  --exclude '.git'
+  --exclude '.github'
+  --exclude '.agents'
+  --exclude '.codex'
+  --exclude '.codex-release-inspect'
+  --exclude 'dist-release'
+  --exclude 'releases'
+  --exclude 'data'
+  --exclude 'backups'
+  --exclude '*.zip'
+  --exclude '*.log'
+  --exclude 'release-clean-audit*.txt'
+  --exclude 'SHA256SUMS*'
+  --exclude 'frontend/node_modules'
+  --exclude 'backend/tmp'
+  --exclude 'agent/tmp'
+  --exclude '*.tsbuildinfo'
+)
 
-# Ensure fast assets are included.
-test -x "$PKG_ROOT/bin/zxy-panel-api-linux-amd64"
-test -x "$PKG_ROOT/bin/zxy-agent-linux-amd64"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a "${EXCLUDES[@]}" "$ROOT_DIR/" "$PKG_ROOT/"
+else
+  (cd "$ROOT_DIR" && tar "${EXCLUDES[@]}" -cf - .) | (cd "$PKG_ROOT" && tar -xf -)
+fi
+
+test -f "$PKG_ROOT/bin/zxy-panel-api-linux-amd64"
+test -f "$PKG_ROOT/bin/zxy-agent-linux-amd64"
 test -f "$PKG_ROOT/frontend/dist/index.html"
 
-(cd "$TMP_DIR" && zip -qr "$PKG_PATH" "$(basename "$PKG_ROOT")")
+if command -v zip >/dev/null 2>&1; then
+  (cd "$TMP_DIR" && zip -qr "$PKG_PATH" "$(basename "$PKG_ROOT")")
+else
+  WIN_ROOT="$(cygpath -w "$PKG_ROOT")"
+  WIN_DEST="$(cygpath -w "$PKG_PATH")"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -LiteralPath '$WIN_ROOT' -DestinationPath '$WIN_DEST' -Force" >/dev/null
+fi
 
 SHA256="$(sha256sum "$PKG_PATH" | awk '{print $1}')"
+printf "%s  %s\n" "$SHA256" "$PKG_NAME" > "$OUT_DIR/SHA256SUMS"
 cat > "$OUT_DIR/version.fast.json" <<JSON
 {
   "latest": "${VERSION}-${CODENAME}-agent-xray",
@@ -64,11 +91,12 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "release_date": "$(date +%F)",
   "changelog": [
-    "修复客户分享弹窗二维码内容错误：V2rayN/Shadowrocket 默认二维码改为 vless:// 单节点链接",
-    "VLESS Reality 分享链接不再强制添加 flow=xtls-rprx-vision，按服务端 Xray client.flow 保持一致，修复扫码后可导入但无法连接的问题",
-    "继续保持单节点二维码为 vless://，订阅二维码与单节点二维码分离，HTTP 订阅仅保留在订阅标签并给出风险提示",
-    "二维码改为本地生成白底图片，支持下载二维码图片后从客户端导入",
-    "保留 V0.7.5.8.1 节点体检优化与升级任务修复"
+    "修复安装脚本默认写入 ZXY_UPDATE_MANIFEST_URL",
+    "修复系统升级中心版本比较逻辑，按数字版本段判断新旧",
+    "远程版本低于或等于当前版本时显示当前已是最新版本，并禁止生成降级命令",
+    "修复 Agent 空闲状态反复下发配置导致 Xray 周期性重启的问题",
+    "修复客户管理编辑按钮和 WebBasePath 下前端路由刷新空白问题",
+    "保留 V0.7.5.9.1 的 vless:// 单节点二维码和 flow 兼容修复"
   ]
 }
 JSON
@@ -76,4 +104,5 @@ JSON
 echo "[5/5] Done"
 echo "Package: $PKG_PATH"
 echo "SHA256:  $SHA256"
+echo "SHA256SUMS: $OUT_DIR/SHA256SUMS"
 echo "Manifest template: $OUT_DIR/version.fast.json"

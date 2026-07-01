@@ -1,17 +1,18 @@
 {
-  "latest": "0.7.6.2-clean-release-fix-agent-xray",
-  "version": "0.7.6.2",
-  "codename": "clean-release-fix",
-  "package": "zxy-panel-v0.7.6.2-clean-release-fix.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.2/zxy-panel-v0.7.6.2-clean-release-fix.zip",
-  "sha256": "0e1fa7f8728c1d4e26d2051a8c249640fcbfd6a9b148ce988b8e6b184f5e2f50",
+  "latest": "0.7.6.4-install-speed-polish-agent-xray",
+  "version": "0.7.6.4",
+  "codename": "install-speed-polish",
+  "package": "zxy-panel-v0.7.6.4-install-speed-polish.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.4/zxy-panel-v0.7.6.4-install-speed-polish.zip",
+  "sha256": "f3330aa3bc625414dee0d727919c7fb6f44a45b93e0ab6614764667073ad1fef",
   "min_supported_version": "0.7.5",
-  "released_at": "2026-06-30T00:00:00Z",
+  "released_at": "2026-07-01T00:00:00Z",
   "changelog": [
-    "Clean V0.7.6.2 release package based on the tested V0.7.6.0 core flow.",
-    "Fix Linux compatible ZIP paths; archive entries use forward slashes.",
-    "Fix Ubuntu 16.04 Python 3.5 compatibility by removing import secrets from install and CLI password generation.",
-    "Write the official ZXY_UPDATE_MANIFEST_URL during installation while preserving existing .env values.",
-    "Use numeric version comparison in the upgrade center and block downgrade commands."
+    "安装速度优化：外层安装和部署脚本默认使用 noninteractive/needrestart 自动模式，减少安装卡住概率",
+    "安装速度优化：已存在 unzip、curl、ca-certificates、nginx、rsync、python3、iproute2 时直接跳过依赖安装",
+    "安装速度优化：已安装 Xray-core 时默认跳过重新下载，避免重复安装耗时",
+    "新增 ZXY_FORCE_INSTALL_XRAY=1 可强制重装 Xray-core，新增 ZXY_SKIP_XRAY_INSTALL=1 可跳过 Xray 安装",
+    "安装日志增加阶段提示，安装完成后继续自动执行 zxy-panel doctor 自检",
+    "不改客户管理、入站管理、Xray 配置生成、二维码、网络策略和 Agent apply 核心逻辑"
   ]
 }

@@ -9,8 +9,8 @@ func TestComparePanelVersions(t *testing.T) {
 		want int
 	}{
 		{"0.7.6.0-base-stable-agent-xray", "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", 1},
-		{"0.7.6.2-clean-release-fix-agent-xray", "0.7.6.0-base-stable-agent-xray", 1},
-		{"v0.7.6.2", "0.7.6.2-clean-release-fix-agent-xray", 0},
+		{"0.7.6.4-install-speed-polish-agent-xray", "0.7.6.0-base-stable-agent-xray", 1},
+		{"v0.7.6.4", "0.7.6.4-install-speed-polish-agent-xray", 0},
 		{"0.7.5.9.1", "0.7.6.0", -1},
 		{"0.7.6", "0.7.6.0", 0},
 	}
@@ -31,7 +31,7 @@ func TestUpdateAvailableDoesNotAllowDowngrade(t *testing.T) {
 	if isRemoteVersionNewer("0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", "0.7.6.0-base-stable-agent-xray") {
 		t.Fatal("older remote version must not be treated as update")
 	}
-	if !isRemoteVersionNewer("0.7.6.2-clean-release-fix-agent-xray", "0.7.6.0-base-stable-agent-xray") {
+	if !isRemoteVersionNewer("0.7.6.4-install-speed-polish-agent-xray", "0.7.6.0-base-stable-agent-xray") {
 		t.Fatal("newer remote version should be treated as update")
 	}
 }

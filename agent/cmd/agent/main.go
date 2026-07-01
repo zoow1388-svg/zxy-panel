@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "0.7.6.2-clean-release-fix-agent-xray"
+const version = "0.7.6.4-install-speed-polish-agent-xray"
 
 type Heartbeat struct {
 	ServerID      string  `json:"server_id"`

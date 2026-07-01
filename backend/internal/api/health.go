@@ -4,5 +4,5 @@ package api
 import "net/http"
 
 func (r *Router) health(w http.ResponseWriter, req *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "zxy-panel-api", "version": "0.7.6.2-clean-release-fix-agent-xray"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "zxy-panel-api", "version": "0.7.6.4-install-speed-polish-agent-xray"})
 }

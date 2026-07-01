@@ -43,6 +43,45 @@ restart_api() {
   $compose restart zxy-panel-api >/dev/null
 }
 
+status_line() {
+  local label="$1"
+  local state="$2"
+  local detail="${3:-}"
+  if [[ "$state" == "ok" ]]; then
+    printf "[OK]   %s" "$label"
+  elif [[ "$state" == "warn" ]]; then
+    printf "[WARN] %s" "$label"
+  else
+    printf "[FAIL] %s" "$label"
+  fi
+  if [[ -n "$detail" ]]; then
+    printf " - %s" "$detail"
+  fi
+  printf "\n"
+}
+
+service_check() {
+  local unit="$1"
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then
+    status_line "$unit" ok "active running"
+    return 0
+  fi
+  status_line "$unit" fail "not active"
+  return 1
+}
+
+recent_xray_restart_count() {
+  local lines
+  lines=$(journalctl -u xray --since "3 minutes ago" --no-pager 2>/dev/null \
+    | grep -E "Stopping Xray|Stopped Xray|Started Xray Service|Reading config|Xray .* started" || true)
+  if [[ -z "$lines" ]]; then
+    echo 0
+    return 0
+  fi
+  printf '%s\n' "$lines" | wc -l | tr -d ' '
+}
+
+
 case "${1:-}" in
   info)
     if [[ ! -f "$PANEL_INFO" ]]; then
@@ -178,6 +217,92 @@ PY
     echo "Password reset successfully."
     echo "Username: ${NEW_USERNAME}"
     echo "Password: ${NEW_PASSWORD}"
+    ;;
+
+
+  doctor)
+    FAILS=0
+    WARNS=0
+    echo "ZXY Panel Doctor"
+    echo "=============================="
+
+    if [[ -f "$PANEL_INFO" ]]; then
+      status_line "panel.info" ok "$PANEL_INFO"
+    else
+      status_line "panel.info" fail "missing: $PANEL_INFO"
+      FAILS=$((FAILS+1))
+    fi
+
+    VERSION=$(get_info VERSION || true)
+    MODE=$(get_info INSTALL_MODE || true)
+    PORT=$(get_info PORT || true)
+    WEB_BASE_PATH=$(get_info WEB_BASE_PATH || true)
+    ACCESS_URL=$(get_info ACCESS_URL || true)
+    printf "%-14s %s\n" "Version:" "${VERSION:-unknown}"
+    printf "%-14s %s\n" "Mode:" "${MODE:-unknown}"
+    printf "%-14s %s\n" "Panel port:" "${PORT:-unknown}"
+    printf "%-14s %s\n" "WebPath:" "${WEB_BASE_PATH:-unknown}"
+    printf "%-14s %s\n" "Access URL:" "${ACCESS_URL:-unknown}"
+    echo
+
+    for unit in zxy-panel-api zxy-agent xray nginx; do
+      if ! service_check "$unit"; then
+        FAILS=$((FAILS+1))
+      fi
+    done
+
+    if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8088/api/health >/dev/null 2>&1; then
+      status_line "API health" ok "http://127.0.0.1:8088/api/health"
+    else
+      status_line "API health" fail "local API is not responding"
+      FAILS=$((FAILS+1))
+    fi
+
+    if [[ -n "${PORT:-}" ]] && command -v curl >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      status_line "Nginx API proxy" ok "http://127.0.0.1:${PORT}/api/health"
+    else
+      status_line "Nginx API proxy" fail "panel port API proxy is not responding"
+      FAILS=$((FAILS+1))
+    fi
+
+    if nginx -t >/dev/null 2>&1; then
+      status_line "Nginx config" ok "syntax ok"
+    else
+      status_line "Nginx config" fail "nginx -t failed"
+      FAILS=$((FAILS+1))
+    fi
+
+    if [[ -f /etc/zxy-panel/xray/config.json ]]; then
+      status_line "Xray config" ok "/etc/zxy-panel/xray/config.json"
+    else
+      status_line "Xray config" warn "missing; create an inbound/client to generate it"
+      WARNS=$((WARNS+1))
+    fi
+
+    if [[ -f "$APP_DIR/.env" ]] && grep -q '^ZXY_UPDATE_MANIFEST_URL=' "$APP_DIR/.env"; then
+      MANIFEST=$(grep -E '^ZXY_UPDATE_MANIFEST_URL=' "$APP_DIR/.env" | head -n1 | cut -d= -f2-)
+      status_line "Update manifest" ok "$MANIFEST"
+    else
+      status_line "Update manifest" warn "ZXY_UPDATE_MANIFEST_URL is not set"
+      WARNS=$((WARNS+1))
+    fi
+
+    RESTART_LINES=$(recent_xray_restart_count || echo 0)
+    if [[ "${RESTART_LINES:-0}" -gt 8 ]]; then
+      status_line "Xray restart watch" warn "recent restart/config lines in 3 minutes: ${RESTART_LINES}"
+      WARNS=$((WARNS+1))
+    else
+      status_line "Xray restart watch" ok "no abnormal restart loop detected"
+    fi
+
+    echo
+    if [[ "$FAILS" -eq 0 ]]; then
+      echo "Doctor result: PASS (${WARNS} warning(s))"
+      exit 0
+    fi
+    echo "Doctor result: FAIL (${FAILS} failure(s), ${WARNS} warning(s))"
+    echo "Tip: run 'zxy-panel logs' or 'journalctl -u zxy-panel-api -u zxy-agent -u xray -u nginx -n 120 --no-pager'."
+    exit 1
     ;;
 
   update)

@@ -1,0 +1,25 @@
+ZXY Panel V0.7.6.4 install-speed-polish release clean audit
+============================================================
+Package: zxy-panel-v0.7.6.4-install-speed-polish.zip
+Version: 0.7.6.4-install-speed-polish-agent-xray
+SHA256: f3330aa3bc625414dee0d727919c7fb6f44a45b93e0ab6614764667073ad1fef
+
+Scope:
+- Installation speed and installation experience polish only.
+- Reuse installed dependencies where possible.
+- Reuse installed Xray-core by default.
+- Add ZXY_FORCE_INSTALL_XRAY=1 and ZXY_SKIP_XRAY_INSTALL=1 controls.
+- Keep zxy-panel doctor post-install self check.
+- No intentional business logic changes to clients, nodes, relays, landing exits, QR sharing, network policy, or Agent apply core logic.
+
+Validation performed:
+- backend go test ./...: PASS
+- agent go test ./...: PASS
+- frontend npm ci + npm run build: PASS
+- bash -n install.sh: PASS
+- bash -n deploy/install.sh: PASS
+- bash -n deploy/agent-install.sh: PASS
+- bash -n scripts/zxy-panel: PASS
+- bash -n scripts/build-fast-release.sh: PASS
+- ZIP generated with Python zipfile using Linux-compatible / paths.
+- node_modules, .git, releases, dist-release, data, backups, old zip, logs excluded.

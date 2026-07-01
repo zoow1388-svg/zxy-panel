@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.6.2-clean-release-fix-agent-xray"
+VERSION="0.7.6.4-install-speed-polish-agent-xray"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"
@@ -12,6 +12,8 @@ WEB_BASE_PATH=${WEB_BASE_PATH:-}
 AUTO_AGENT=${AUTO_AGENT:-true}
 INSTALL_XRAY=${INSTALL_XRAY:-true}
 SETUP_XRAY_SERVICE=${SETUP_XRAY_SERVICE:-true}
+ZXY_FORCE_INSTALL_XRAY=${ZXY_FORCE_INSTALL_XRAY:-0}
+ZXY_SKIP_XRAY_INSTALL=${ZXY_SKIP_XRAY_INSTALL:-0}
 FRESH_INSTALL=${FRESH_INSTALL:-false}
 ZXY_INSTALL_MODE=${ZXY_INSTALL_MODE:-auto}   # auto | fast | docker
 
@@ -422,6 +424,16 @@ allow_local_firewall() {
   fi
 }
 
+
+post_install_self_check() {
+  step "Post-install self check"
+  if command -v zxy-panel >/dev/null 2>&1; then
+    zxy-panel doctor || true
+  else
+    echo "zxy-panel CLI not found, skip doctor check."
+  fi
+}
+
 print_result() {
   echo
   echo "ZXY Panel installed successfully"
@@ -442,6 +454,7 @@ print_result() {
   echo "  zxy-panel status"
   echo "  zxy-panel restart"
   echo "  zxy-panel logs"
+  echo "  zxy-panel doctor"
   echo "  zxy-panel reset-password"
   echo
   echo "Important: open TCP port ${PANEL_PORT} in your cloud firewall/security group for panel access."
@@ -503,7 +516,7 @@ PY
     echo "WARNING: local server not found, skip Agent auto install."
   else
     chmod +x deploy/agent-install.sh
-    INSTALL_XRAY="$INSTALL_XRAY" SETUP_XRAY_SERVICE="$SETUP_XRAY_SERVICE" APPLY_CONFIG=true PANEL_BASE="http://127.0.0.1:${API_PORT}" SERVER_ID="$SERVER_ID" AGENT_TOKEN="$AGENT_TOKEN" ./deploy/agent-install.sh
+    INSTALL_XRAY="$INSTALL_XRAY" SETUP_XRAY_SERVICE="$SETUP_XRAY_SERVICE" ZXY_FORCE_INSTALL_XRAY="$ZXY_FORCE_INSTALL_XRAY" ZXY_SKIP_XRAY_INSTALL="$ZXY_SKIP_XRAY_INSTALL" APPLY_CONFIG=true PANEL_BASE="http://127.0.0.1:${API_PORT}" SERVER_ID="$SERVER_ID" AGENT_TOKEN="$AGENT_TOKEN" ./deploy/agent-install.sh
   fi
 }
 
@@ -610,6 +623,7 @@ main() {
   echo "Install mode: ${INSTALL_MODE}"
   if [[ "$INSTALL_MODE" == "fast" ]]; then
     echo "Fast mode detected: Docker build / Node build / Go build will be skipped."
+    echo "Install speed polish: existing dependencies and existing Xray will be reused when possible."
   else
     echo "Docker compatibility mode: no prebuilt fast assets found."
   fi
@@ -698,6 +712,7 @@ main() {
 
   allow_local_firewall
   install_local_agent
+  post_install_self_check
   print_result
 }
 

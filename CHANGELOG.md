@@ -1,13 +1,15 @@
 # CHANGELOG
 
-## V0.7.6.2 clean-release-fix
+## V0.7.6.4 install-speed-polish
 
-- 修复 Windows 打包导致 Release ZIP 内部路径使用反斜杠，Ubuntu/Linux `unzip` 解压失败的问题。
-- 构建脚本改为通过 Python `zipfile` 生成 Linux 兼容 ZIP，包内路径统一使用 `/`。
-- 安装脚本默认写入正式 `ZXY_UPDATE_MANIFEST_URL`，系统升级页可直接读取远程 `version.json`。
-- 系统升级中心改为按数字版本段比较，禁止把旧版本当成新版本并生成降级命令。
-- 托管升级任务同样禁止远程版本低于或等于当前版本时创建降级任务。
-- 保留 V0.7.6.0 已通过的 Base Stable 核心功能：Agent 空闲不再反复重启 Xray、客户编辑可用、WebBasePath 页面刷新不空白。
+- 优化一键安装速度和安装体验。
+- 外层 `install.sh` 默认启用 `DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=a`、`NEEDRESTART_SUSPEND=1`，减少依赖安装阶段卡住。
+- 已安装基础依赖时跳过安装，避免重复 apt update 和重复安装。
+- 已安装 Xray-core 时默认跳过重新下载，重复安装明显更快。
+- 新增 `ZXY_FORCE_INSTALL_XRAY=1` 强制重装 Xray-core。
+- 新增 `ZXY_SKIP_XRAY_INSTALL=1` 跳过 Xray-core 安装。
+- 安装日志增加阶段提示，继续保留安装后 `zxy-panel doctor` 自检。
+- 不修改客户管理、入站、中转、落地出口、二维码、网络策略、Agent apply 等核心逻辑。
 
 ## V0.7.5.5 network-policy-center
 

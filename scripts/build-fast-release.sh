@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.6.2}"
-CODENAME="clean-release-fix"
+VERSION="${1:-0.7.6.4}"
+CODENAME="install-speed-polish"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -74,16 +74,15 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "version": "${VERSION}",
   "codename": "${CODENAME}",
   "package": "${PKG_NAME}",
-  "download_url": "REPLACE_WITH_GITHUB_RELEASE_DOWNLOAD_URL/${PKG_NAME}",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v${VERSION}/${PKG_NAME}",
   "sha256": "${SHA256}",
   "min_supported_version": "0.7.5",
-  "release_date": "$(date +%F)",
+  "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "changelog": [
-    "修复 Agent 空闲状态反复下发配置导致 Xray 周期性重启的问题",
-    "修复客户管理编辑按钮无明显响应，点击编辑会自动展开高级客户表单并加载当前客户信息",
-    "修复 WebBasePath 下前端路由刷新空白问题，支持 /dashboard、/clients 等页面直接刷新",
-    "保留 V0.7.5.9.1 的 vless:// 单节点二维码、flow 兼容修复和 HTTP 订阅分离逻辑",
-    "作为基础版稳定候选，保留 fast/systemd、网络策略、节点体检和托管升级中心"
+    "新增 zxy-panel doctor 安装后自检命令，集中检查 API、Agent、Xray、Nginx、面板端口反代、Xray 配置和升级清单",
+    "安装完成后自动执行基础自检，方便快速判断一键安装是否真的成功",
+    "继续保留 V0.7.6.2 已通过的一键安装、Linux ZIP 解压、Python 3.5 兼容、版本比较和禁止降级修复",
+    "继续保留 V0.7.6.0 Base Stable 核心功能：Agent 空闲不反复重启 Xray、客户编辑可用、WebBasePath 刷新不空白、vless:// 二维码正常"
   ]
 }
 JSON

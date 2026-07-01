@@ -10,6 +10,8 @@ XRAY_TEST_CMD="${XRAY_TEST_CMD:-xray run -test -config {config}}"
 XRAY_RELOAD_CMD="${XRAY_RELOAD_CMD:-systemctl restart xray}"
 INSTALL_XRAY="${INSTALL_XRAY:-true}"
 SETUP_XRAY_SERVICE="${SETUP_XRAY_SERVICE:-true}"
+ZXY_FORCE_INSTALL_XRAY="${ZXY_FORCE_INSTALL_XRAY:-0}"
+ZXY_SKIP_XRAY_INSTALL="${ZXY_SKIP_XRAY_INSTALL:-0}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DST="/usr/local/bin/zxy-agent"
@@ -54,15 +56,23 @@ JSON
   return 0
 }
 
-if [[ "${INSTALL_XRAY}" == "true" ]]; then
-  if command -v xray >/dev/null 2>&1; then
-    echo "Xray-core already installed: $(xray version | head -1)"
+if [[ "${ZXY_SKIP_XRAY_INSTALL}" == "1" || "${ZXY_SKIP_XRAY_INSTALL}" == "true" ]]; then
+  echo "ZXY_SKIP_XRAY_INSTALL is enabled, skip Xray-core installation."
+elif [[ "${INSTALL_XRAY}" == "true" ]]; then
+  if [[ "${ZXY_FORCE_INSTALL_XRAY}" != "1" && "${ZXY_FORCE_INSTALL_XRAY}" != "true" ]] && command -v xray >/dev/null 2>&1; then
+    echo "Xray-core already installed, skip download: $(xray version | head -1)"
   elif install_local_xray_if_available; then
     echo "Bundled Xray-core installed: $(xray version | head -1)"
   else
-    echo "Installing Xray-core using the official community install script..."
+    if [[ "${ZXY_FORCE_INSTALL_XRAY}" == "1" || "${ZXY_FORCE_INSTALL_XRAY}" == "true" ]]; then
+      echo "ZXY_FORCE_INSTALL_XRAY is enabled, reinstalling Xray-core using official community install script..."
+    else
+      echo "Xray-core not found, installing using official community install script..."
+    fi
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
   fi
+else
+  echo "INSTALL_XRAY is false, skip Xray-core installation."
 fi
 
 BIN_SRC=""

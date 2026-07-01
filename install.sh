@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+export NEEDRESTART_SUSPEND="${NEEDRESTART_SUSPEND:-1}"
+
 APP_NAME="zxy-panel"
 REPO_OWNER="${ZXY_REPO_OWNER:-zoow1388-svg}"
 REPO_NAME="${ZXY_REPO_NAME:-zxy-panel}"
@@ -81,6 +85,7 @@ install_dependencies() {
   fi
 
   log "安装缺失依赖：${missing[*]}"
+  log "首次安装会更新系统依赖索引，网络较慢时可能需要 1-3 分钟。"
   if command -v apt-get >/dev/null 2>&1; then
     apt_update_once
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
@@ -247,6 +252,7 @@ ZXY Panel 安装流程已完成。
   zxy-panel info
   zxy-panel status
   zxy-panel logs
+  zxy-panel doctor
 
 面板访问地址：
 FINISH_HEAD

@@ -140,9 +140,10 @@ case "${1:-}" in
       exit 1
     fi
     NEW_PASSWORD=$(python3 - <<'PY_RANDOM'
-import secrets, string
+import random, string
+rng = random.SystemRandom()
 alphabet = string.ascii_letters + string.digits
-print(''.join(secrets.choice(alphabet) for _ in range(12)), end='')
+print(''.join(rng.choice(alphabet) for _ in range(12)), end='')
 PY_RANDOM
 )
     NEW_USERNAME="admin"

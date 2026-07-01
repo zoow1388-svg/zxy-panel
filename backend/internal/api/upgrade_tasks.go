@@ -138,21 +138,15 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "远程版本清单不可用：" + err.Error()})
 		return
 	}
+	target := firstNonEmpty(manifest.Latest, manifest.Version)
+	if !isRemoteVersionNewer(target, panelVersion) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "current_version": panelVersion, "target_version": target, "message": "当前已是最新版本，远程版本不高于当前版本，已禁止创建降级升级任务。"})
+		return
+	}
 	pkg := strings.TrimSpace(manifest.Package)
 	if pkg == "" && manifest.DownloadURL != "" {
 		parts := strings.Split(manifest.DownloadURL, "/")
 		pkg = parts[len(parts)-1]
-	}
-	target := targetManifestVersion(manifest)
-	if ok, message := upgradeAllowedMessage(target); !ok {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":               false,
-			"current_version":  panelVersion,
-			"target_version":   target,
-			"update_available": false,
-			"message":          message,
-		})
-		return
 	}
 	if pkg == "" || strings.TrimSpace(manifest.DownloadURL) == "" || strings.TrimSpace(manifest.SHA256) == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "version.json 缺少 package、download_url 或 sha256，禁止托管升级。"})
@@ -169,7 +163,7 @@ func (r *Router) updateTaskCreate(w http.ResponseWriter, req *http.Request) {
 		Stage:          "created",
 		Message:        "升级任务已创建，等待独立 systemd runner 接管。",
 		CurrentVersion: panelVersion,
-		TargetVersion:  target,
+		TargetVersion:  firstNonEmpty(manifest.Latest, manifest.Version),
 		Package:        pkg,
 		DownloadURL:    manifest.DownloadURL,
 		SHA256:         manifest.SHA256,

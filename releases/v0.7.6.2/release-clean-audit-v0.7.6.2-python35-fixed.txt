@@ -1,0 +1,20 @@
+ZXY Panel V0.7.6.2 clean release fix audit
+
+Package: zxy-panel-v0.7.6.2-clean-release-fix.zip
+Actual file in sandbox: zxy-panel-v0.7.6.2-clean-release-fix-python35-fixed.zip
+Version: 0.7.6.2-clean-release-fix-agent-xray
+SHA256: 0e1fa7f8728c1d4e26d2051a8c249640fcbfd6a9b148ce988b8e6b184f5e2f50
+
+Checks performed:
+- deploy/install.sh bash -n: PASS
+- deploy/agent-install.sh bash -n: PASS
+- scripts/zxy-panel bash -n: PASS
+- version-v0.7.6.2-python35-fixed.json json parse: PASS
+- package unzip -t: PASS
+- package path separator check: PASS, no Windows backslash paths
+- grep import secrets/secrets: PASS, none remain
+
+Fixes included:
+- Replaced Python secrets module usage with random.SystemRandom for Ubuntu 16.04 / Python 3.5 compatibility.
+- External version.json manifest is valid JSON with no multiline unescaped strings.
+- ZIP is built with Linux-compatible forward slash paths.

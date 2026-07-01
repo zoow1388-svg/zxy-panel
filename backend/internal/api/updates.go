@@ -84,16 +84,14 @@ func (r *Router) updateCheck(w http.ResponseWriter, req *http.Request) {
 	if latest == "" {
 		latest = manifest.Version
 	}
-	cmp, comparable := compareVersionNumbers(latest, panelVersion)
-	updateAvailable := comparable && cmp > 0
+	available := isRemoteVersionNewer(latest, panelVersion)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"current_version":  panelVersion,
 		"latest_version":   latest,
-		"update_available": updateAvailable,
-		"version_compare":  cmp,
+		"update_available": available,
 		"manifest":         manifest,
-		"message":          versionUpdateMessage(latest),
+		"message":          updateMessage(latest),
 	})
 }
 
@@ -112,21 +110,15 @@ func (r *Router) updatePanelCommand(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "message": "无法生成升级命令：远程版本清单不可用：" + err.Error()})
 		return
 	}
+	target := firstNonEmpty(manifest.Latest, manifest.Version)
+	if !isRemoteVersionNewer(target, panelVersion) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "current_version": panelVersion, "target_version": target, "message": "当前已是最新版本，远程版本不高于当前版本，已禁止生成降级命令。"})
+		return
+	}
 	pkg := strings.TrimSpace(manifest.Package)
 	if pkg == "" && manifest.DownloadURL != "" {
 		parts := strings.Split(manifest.DownloadURL, "/")
 		pkg = parts[len(parts)-1]
-	}
-	target := targetManifestVersion(manifest)
-	if ok, message := upgradeAllowedMessage(target); !ok {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":               false,
-			"current_version":  panelVersion,
-			"target_version":   target,
-			"update_available": false,
-			"message":          message,
-		})
-		return
 	}
 	if pkg == "" || manifest.DownloadURL == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "version.json 缺少 package 或 download_url。"})
@@ -141,7 +133,7 @@ func (r *Router) updatePanelCommand(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":              true,
 		"current_version": panelVersion,
-		"target_version":  target,
+		"target_version":  firstNonEmpty(manifest.Latest, manifest.Version),
 		"package":         pkg,
 		"command":         command,
 		"message":         "为安全起见，当前版本先生成可审查升级命令。确认无误后可复制到服务器执行。后续版本会加入后台直接执行与回滚。",
@@ -217,100 +209,75 @@ func updateMessage(latest string) string {
 	if latest == "" {
 		return "远程版本清单未提供 latest 字段。"
 	}
-	if latest == panelVersion {
-		return "当前面板已经是最新版本。"
+	if isRemoteVersionNewer(latest, panelVersion) {
+		return "发现新版本，可查看更新日志并生成升级命令。"
 	}
-	return "发现新版本，可查看更新日志并生成升级命令。"
+	return "当前已是最新版本。"
 }
 
-func targetManifestVersion(manifest updateManifest) string {
-	return firstNonEmpty(manifest.Latest, manifest.Version)
+func isRemoteVersionNewer(remote, current string) bool {
+	return comparePanelVersions(remote, current) > 0
 }
 
-func versionUpdateMessage(latest string) string {
-	if latest == "" {
-		return "远程版本清单未提供 latest/version 字段。"
+func comparePanelVersions(a, b string) int {
+	ap := numericVersionParts(a)
+	bp := numericVersionParts(b)
+	max := len(ap)
+	if len(bp) > max {
+		max = len(bp)
 	}
-	cmp, ok := compareVersionNumbers(latest, panelVersion)
-	if !ok {
-		return "无法识别远程版本号，已停止自动升级判断。"
-	}
-	if cmp <= 0 {
-		return "当前已是最新版本。"
-	}
-	return "发现新版本，可查看更新日志并生成升级命令。"
-}
-
-func upgradeAllowedMessage(target string) (bool, string) {
-	if strings.TrimSpace(target) == "" {
-		return false, "远程版本清单未提供目标版本，禁止生成升级命令。"
-	}
-	cmp, ok := compareVersionNumbers(target, panelVersion)
-	if !ok {
-		return false, "无法识别远程版本号，禁止生成升级命令。"
-	}
-	if cmp <= 0 {
-		return false, "当前已是最新版本，不生成降级命令。"
-	}
-	return true, ""
-}
-
-func compareVersionNumbers(remote, current string) (int, bool) {
-	rv, rok := numericVersionParts(remote)
-	cv, cok := numericVersionParts(current)
-	if !rok || !cok {
-		return 0, false
-	}
-	maxLen := len(rv)
-	if len(cv) > maxLen {
-		maxLen = len(cv)
-	}
-	for i := 0; i < maxLen; i++ {
-		r, c := 0, 0
-		if i < len(rv) {
-			r = rv[i]
+	for i := 0; i < max; i++ {
+		ai, bi := 0, 0
+		if i < len(ap) {
+			ai = ap[i]
 		}
-		if i < len(cv) {
-			c = cv[i]
+		if i < len(bp) {
+			bi = bp[i]
 		}
-		if r > c {
-			return 1, true
+		if ai > bi {
+			return 1
 		}
-		if r < c {
-			return -1, true
+		if ai < bi {
+			return -1
 		}
 	}
-	return 0, true
+	return 0
 }
 
-func numericVersionParts(version string) ([]int, bool) {
-	s := strings.TrimSpace(version)
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
-	var b strings.Builder
-	for _, ch := range s {
-		if (ch >= '0' && ch <= '9') || ch == '.' {
-			b.WriteRune(ch)
+func numericVersionParts(s string) []int {
+	s = strings.TrimSpace(s)
+	start := -1
+	for i, r := range s {
+		if r >= '0' && r <= '9' {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	end := start
+	for end < len(s) {
+		c := s[end]
+		if (c < '0' || c > '9') && c != '.' {
+			break
+		}
+		end++
+	}
+	parts := strings.Split(strings.Trim(s[start:end], "."), ".")
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			out = append(out, 0)
 			continue
 		}
-		break
-	}
-	numeric := strings.Trim(b.String(), ".")
-	if numeric == "" {
-		return nil, false
-	}
-	raw := strings.Split(numeric, ".")
-	parts := make([]int, 0, len(raw))
-	for _, item := range raw {
-		if item == "" {
-			return nil, false
-		}
-		n, err := strconv.Atoi(item)
+		n, err := strconv.Atoi(part)
 		if err != nil {
-			return nil, false
+			n = 0
 		}
-		parts = append(parts, n)
+		out = append(out, n)
 	}
-	return parts, len(parts) > 0
+	return out
 }
 
 func shellEscape(s string) string    { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

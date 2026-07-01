@@ -3,39 +3,35 @@ package api
 
 import "testing"
 
-func TestCompareVersionNumbers(t *testing.T) {
-	tests := []struct {
-		remote  string
-		current string
-		want    int
+func TestComparePanelVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
 	}{
-		{"0.7.6.1-zip-path-install-fix-agent-xray", "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", 1},
-		{"0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", "0.7.6.1-zip-path-install-fix-agent-xray", -1},
-		{"0.7.6.1", "0.7.6", 1},
-		{"v0.7.6.1", "0.7.6.1-zip-path-install-fix-agent-xray", 0},
+		{"0.7.6.0-base-stable-agent-xray", "0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", 1},
+		{"0.7.6.2-clean-release-fix-agent-xray", "0.7.6.0-base-stable-agent-xray", 1},
+		{"v0.7.6.2", "0.7.6.2-clean-release-fix-agent-xray", 0},
+		{"0.7.5.9.1", "0.7.6.0", -1},
+		{"0.7.6", "0.7.6.0", 0},
 	}
-	for _, tt := range tests {
-		got, ok := compareVersionNumbers(tt.remote, tt.current)
-		if !ok {
-			t.Fatalf("compareVersionNumbers(%q, %q) was not comparable", tt.remote, tt.current)
+	for _, tc := range cases {
+		got := comparePanelVersions(tc.a, tc.b)
+		if got < 0 {
+			got = -1
+		} else if got > 0 {
+			got = 1
 		}
-		if got != tt.want {
-			t.Fatalf("compareVersionNumbers(%q, %q)=%d, want %d", tt.remote, tt.current, got, tt.want)
+		if got != tc.want {
+			t.Fatalf("comparePanelVersions(%q, %q)=%d want %d", tc.a, tc.b, got, tc.want)
 		}
 	}
 }
 
-func TestUpgradeAllowedMessageRejectsDowngrade(t *testing.T) {
-	ok, _ := upgradeAllowedMessage("0.7.5.9.1-qr-flow-compatibility-fix-agent-xray")
-	if ok {
-		t.Fatal("older remote version should not be allowed as an upgrade")
+func TestUpdateAvailableDoesNotAllowDowngrade(t *testing.T) {
+	if isRemoteVersionNewer("0.7.5.9.1-qr-flow-compatibility-fix-agent-xray", "0.7.6.0-base-stable-agent-xray") {
+		t.Fatal("older remote version must not be treated as update")
 	}
-	ok, _ = upgradeAllowedMessage("0.7.6.1-zip-path-install-fix-agent-xray")
-	if ok {
-		t.Fatal("equal remote version should not generate an upgrade command")
-	}
-	ok, _ = upgradeAllowedMessage("0.7.6.2-next-fix-agent-xray")
-	if !ok {
-		t.Fatal("newer remote version should be allowed as an upgrade")
+	if !isRemoteVersionNewer("0.7.6.2-clean-release-fix-agent-xray", "0.7.6.0-base-stable-agent-xray") {
+		t.Fatal("newer remote version should be treated as update")
 	}
 }

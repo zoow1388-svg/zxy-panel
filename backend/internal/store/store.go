@@ -77,7 +77,7 @@ func (s *Store) loadOrInit() error {
 
 func newData() model.PanelData {
 	return model.PanelData{
-		Version:       "0.7.6.1-zip-path-install-fix-agent-xray",
+		Version:       "0.7.6.2-clean-release-fix-agent-xray",
 		Admins:        map[string]model.AdminUser{},
 		Servers:       map[string]model.Server{},
 		Nodes:         map[string]model.Node{},
@@ -112,8 +112,8 @@ func normalize(d *model.PanelData) {
 	}
 	normalizeNetworkPolicy(&d.NetworkPolicy)
 	normalizeNetworkPolicy(&d.NetworkPolicyBackup)
-	// V0.4.1: old data may miss PasswordHash after json:"-" migrations.
-	// Reset empty admin hashes to the default test password so upgrades can recover login.
+	// V0.4.1 修复：旧版本 AdminUser.PasswordHash 被 json:"-" 忽略，重启后会丢失密码哈希，导致 admin/admin123 无法登录。
+	// 如果发现管理员哈希为空，自动重置为默认密码 admin123，方便测试版升级恢复登录。
 	for id, a := range d.Admins {
 		if a.PasswordHash == "" {
 			hash, err := security.HashPassword("admin123")
@@ -124,7 +124,7 @@ func normalize(d *model.PanelData) {
 			}
 		}
 	}
-	d.Version = "0.7.6.1-zip-path-install-fix-agent-xray"
+	d.Version = "0.7.6.2-clean-release-fix-agent-xray"
 }
 
 func defaultNetworkPolicy() model.NetworkPolicy {
@@ -205,7 +205,7 @@ func (s *Store) seedLocalServer() error {
 	serverID := NewID("srv")
 	ip := getenv("ZXY_LOCAL_SERVER_IP", "127.0.0.1")
 	host := getenv("ZXY_LOCAL_SERVER_HOST", ip)
-	name := getenv("ZXY_LOCAL_SERVER_NAME", "Local Server")
+	name := getenv("ZXY_LOCAL_SERVER_NAME", "本机服务器")
 	region := getenv("ZXY_LOCAL_SERVER_REGION", "Local")
 	provider := getenv("ZXY_LOCAL_SERVER_PROVIDER", "Self-hosted")
 	s.Data.Servers[serverID] = model.Server{
@@ -221,12 +221,12 @@ func (s *Store) ensureSingleModeLocalServer() (bool, error) {
 	}
 	localIP := getenv("ZXY_LOCAL_SERVER_IP", "127.0.0.1")
 	localHost := getenv("ZXY_LOCAL_SERVER_HOST", localIP)
-	localName := getenv("ZXY_LOCAL_SERVER_NAME", "Local Server")
+	localName := getenv("ZXY_LOCAL_SERVER_NAME", "本机服务器")
 	localRegion := getenv("ZXY_LOCAL_SERVER_REGION", "Local")
 	localProvider := getenv("ZXY_LOCAL_SERVER_PROVIDER", "Self-hosted")
 
-	// V0.5.8: when upgrading old single-node data, merge duplicate local servers
-	// so old server_id bindings and Agent status keep working.
+	// V0.5.8：从 V0.4.x / V0.5.0 升级到单机模式时，旧数据里可能已经存在同 IP 服务器。
+	// 这里自动选择一台作为“本机服务器”，把同 IP/Host 的重复服务器合并，避免后台出现多个本机、Agent 版本报警、入站绑定旧 server_id。
 	candidates := []model.Server{}
 	for _, srv := range s.Data.Servers {
 		if sameServerEndpoint(srv, localIP, localHost) || len(s.Data.Servers) == 1 {
@@ -242,7 +242,8 @@ func (s *Store) ensureSingleModeLocalServer() (bool, error) {
 		keep.Name = localName
 		changed = true
 	}
-	// If install detected a public endpoint, keep the local server display in sync.
+	// V0.5.8：如果升级后本机服务器还显示 127.0.0.1/localhost，而安装脚本已经识别到公网 IP，
+	// 自动把展示 IP/Host 修正为公网入口，避免后台看起来像只能本机访问。
 	if keep.IP == "" || shouldReplaceLocalEndpoint(keep.IP, localIP) {
 		keep.IP = localIP
 		changed = true
@@ -307,7 +308,7 @@ func shouldReplaceLocalEndpoint(current, target string) bool {
 func pickLocalServer(list []model.Server) model.Server {
 	keep := list[0]
 	for _, srv := range list[1:] {
-		if srv.AgentVersion == "0.7.6.1-zip-path-install-fix-agent-xray" && keep.AgentVersion != "0.7.6.1-zip-path-install-fix-agent-xray" {
+		if srv.AgentVersion == "0.7.6.2-clean-release-fix-agent-xray" && keep.AgentVersion != "0.7.6.2-clean-release-fix-agent-xray" {
 			keep = srv
 			continue
 		}

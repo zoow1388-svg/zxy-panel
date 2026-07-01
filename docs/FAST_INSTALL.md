@@ -1,4 +1,4 @@
-# ZXY Panel V0.7.6.1 Node Diagnosis Patch
+# ZXY Panel V0.7.6.2 Node Diagnosis Patch
 
 ## 目标
 
@@ -48,7 +48,7 @@ bash scripts/build-fast-release.sh 0.7.5.8
 构建完成后会生成：
 
 ```text
-dist-release/zxy-panel-v0.7.6.1-node-diagnosis-center.zip
+dist-release/zxy-panel-v0.7.6.2-node-diagnosis-center.zip
 dist-release/version.fast.json
 ```
 

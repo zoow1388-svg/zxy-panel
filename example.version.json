@@ -1,16 +1,17 @@
 {
-  "latest": "0.7.6.1-zip-path-install-fix-agent-xray",
-  "version": "0.7.6.1",
-  "codename": "zip-path-install-fix",
-  "package": "zxy-panel-v0.7.6.1-zip-path-install-fix.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.1/zxy-panel-v0.7.6.1-zip-path-install-fix.zip",
-  "sha256": "ecba9ac9baeb0003b64aac4887f0308665a54448f5dcf902d0f71f1875b8aeed",
+  "latest": "0.7.6.2-clean-release-fix-agent-xray",
+  "version": "0.7.6.2",
+  "codename": "clean-release-fix",
+  "package": "zxy-panel-v0.7.6.2-clean-release-fix.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.6.2/zxy-panel-v0.7.6.2-clean-release-fix.zip",
+  "sha256": "REPLACE_WITH_SHA256_AFTER_ZIP_BUILD",
   "min_supported_version": "0.7.5",
-  "released_at": "2026-07-01T00:00:00+08:00",
+  "released_at": "2026-06-30T00:00:00Z",
   "changelog": [
-    "Fix Windows-built release ZIP path separators so Linux unzip can extract deploy/install.sh correctly",
-    "Normalize release ZIP internal paths to forward slashes",
-    "Keep default ZXY_UPDATE_MANIFEST_URL writing during install",
-    "Keep numeric version comparison in the managed upgrade center"
+    "修复 Windows 打包导致 Release ZIP 内部路径使用反斜杠，在 Linux/Ubuntu unzip 解压失败的问题",
+    "保留 V0.7.6.0 已通过的 Base Stable 核心功能：Agent 空闲不再反复重启 Xray、客户编辑可用、WebBasePath 刷新不空白",
+    "安装脚本默认写入正式 ZXY_UPDATE_MANIFEST_URL，系统升级中心可直接读取远程 version.json",
+    "系统升级中心按数字版本段比较版本号，禁止把旧版本当作新版本并生成降级命令",
+    "托管升级任务同样禁止远程版本低于或等于当前版本时创建降级任务"
   ]
 }

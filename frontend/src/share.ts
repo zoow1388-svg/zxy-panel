@@ -5,7 +5,7 @@ export type ShareFormat = 'v2rayn' | 'shadowrocket' | 'clash' | 'singbox'
 export const shareFormatOptions: Array<{ value: ShareFormat; label: string; tip: string }> = [
   { value: 'v2rayn', label: 'V2rayN', tip: '通用 VLESS Reality 单节点链接，优先用于扫码导入。' },
   { value: 'shadowrocket', label: 'Shadowrocket', tip: 'iPhone 小火箭，使用同一条 VLESS Reality 通用链接。' },
-  { value: 'clash', label: 'Clash Meta', tip: '生成 Clash Meta YAML 配置，可复制到配置文件。' },
+  { value: 'clash', label: 'Clash Meta', tip: '生成 Clash Meta / Mihomo YAML。Clash Verge 建议优先使用专用订阅链接或下载 yaml 文件。' },
   { value: 'singbox', label: 'sing-box', tip: '生成 sing-box JSON 配置，可用于 sing-box / SFI。' },
 ]
 
@@ -58,6 +58,14 @@ function appBasePath(): string {
 
 export function buildSubscriptionUrl(client: any): string {
   return `${location.origin}${appBasePath()}sub/${client.subscribe_token}`
+}
+
+export function buildClashSubscriptionUrl(client: any): string {
+  return `${buildSubscriptionUrl(client)}?format=clash`
+}
+
+export function buildClashDownloadUrl(client: any): string {
+  return `${buildSubscriptionUrl(client)}?format=clash&download=1`
 }
 
 export function buildShortNodeUrl(client: any, node: any): string {
@@ -154,13 +162,14 @@ function clashProxy(node: any, client: any): string {
     lines.push(`    tls: true`)
     if (node.sni) lines.push(`    servername: ${yamlQuote(node.sni)}`)
     lines.push(`    client-fingerprint: ${yamlQuote(valueOr(node.fingerprint, 'chrome'))}`)
+    lines.push('    skip-cert-verify: false')
   } else {
     lines.push(`    tls: false`)
   }
   if (isReality(node)) {
     lines.push(`    reality-opts:`)
     lines.push(`      public-key: ${yamlQuote(node.reality_public_key || '')}`)
-    lines.push(`      short-id: ${yamlQuote(node.reality_short_id || '')}`)
+    if (node.reality_short_id) lines.push(`      short-id: ${yamlQuote(node.reality_short_id || '')}`)
   }
   if (transport === 'ws' && node.path) {
     lines.push(`    ws-opts:`)
@@ -177,7 +186,7 @@ export function buildClashMetaConfig(nodes: any[], client: any, policy: any = {}
   const enabled = nodes.filter(Boolean)
   const names = enabled.map(n => safeName(n))
   const proxyList = enabled.map(n => clashProxy(n, client)).join('\n')
-  const groupProxies = names.length ? names.map(n => `      - ${yamlQuote(n)}`).join('\n') : '      - DIRECT'
+  const groupProxies = names.length ? [...names.map(n => `      - ${yamlQuote(n)}`), '      - DIRECT'].join('\n') : '      - DIRECT'
   const nameservers = ['    - 1.1.1.1', '    - 8.8.8.8']
   if (policy?.clash_include_quad9) nameservers.push('    - 9.9.9.9')
   return [
@@ -186,6 +195,9 @@ export function buildClashMetaConfig(nodes: any[], client: any, policy: any = {}
     'mode: rule',
     'log-level: info',
     'ipv6: false',
+    'global-client-fingerprint: chrome',
+    'unified-delay: true',
+    'tcp-concurrent: true',
     'dns:',
     '  enable: true',
     '  ipv6: false',

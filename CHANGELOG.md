@@ -1,6 +1,18 @@
+# Changelog
+
+## V0.7.7.1 clash-import-polish
+
+- 新增 `zxy-panel backup` 一键备份命令，集中备份数据、面板信息、环境变量、Nginx 配置、Xray 配置和关键 systemd 配置。
+- 新增 `zxy-panel backup-list` 备份列表命令，便于快速查看最近备份文件。
+- 新增 `zxy-panel restore [backup-file]` 恢复命令，恢复后自动 daemon-reload、重启 API/Agent/Xray、reload Nginx 并执行 doctor。
+- 安装/升级前自动创建 pre-install 备份；全新安装没有旧数据时自动跳过。
+- `zxy-panel doctor` 增加备份状态和数据文件检查。
+- `zxy-panel info` 默认隐藏 Password 与 API Token，使用 `--show-secret` 才显示完整敏感信息。
+- 不修改客户管理、入站管理、中转、落地出口、Xray 配置生成、二维码、网络策略和 Agent apply 核心逻辑。
+
 # CHANGELOG
 
-## V0.7.6.4 install-speed-polish
+## V0.7.7.1 clash-import-polish
 
 - 优化一键安装速度和安装体验。
 - 外层 `install.sh` 默认启用 `DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=a`、`NEEDRESTART_SUSPEND=1`，减少依赖安装阶段卡住。

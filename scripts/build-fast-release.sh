@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.6.4}"
-CODENAME="install-speed-polish"
+VERSION="${1:-0.7.7.1}"
+CODENAME="clash-import-polish"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -79,12 +79,14 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "changelog": [
-    "新增 zxy-panel doctor 安装后自检命令，集中检查 API、Agent、Xray、Nginx、面板端口反代、Xray 配置和升级清单",
-    "安装完成后自动执行基础自检，方便快速判断一键安装是否真的成功",
-    "继续保留 V0.7.6.2 已通过的一键安装、Linux ZIP 解压、Python 3.5 兼容、版本比较和禁止降级修复",
-    "继续保留 V0.7.6.0 Base Stable 核心功能：Agent 空闲不反复重启 Xray、客户编辑可用、WebBasePath 刷新不空白、vless:// 二维码正常"
-  ]
-}
+    "新增 Clash Verge / Mihomo 专用远程订阅：/sub/<token>?format=clash",
+    "新增 Clash YAML 下载支持：/sub/<token>?format=clash&download=1",
+    "客户分享弹窗新增复制 Clash Verge 订阅链接、下载 clash.yaml 按钮",
+    "优化 Clash Meta YAML：加入 global-client-fingerprint、unified-delay、tcp-concurrent、DIRECT 备用项和兼容提示",
+    "明确提示仅支持 Mihomo / Clash Meta / Clash Verge Rev，旧版 Clash 不支持 VLESS Reality",
+    "保留 V0.7.7.0 备份、恢复、doctor、敏感信息脱敏能力",
+    "不改客户管理、入站管理、Xray 配置生成、二维码、网络策略和 Agent apply 核心逻辑"
+  ]}
 JSON
 
 echo "[5/5] Done"

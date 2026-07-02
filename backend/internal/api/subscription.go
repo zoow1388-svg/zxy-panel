@@ -2,6 +2,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,11 +13,25 @@ import (
 )
 
 func (r *Router) subscription(w http.ResponseWriter, req *http.Request) {
-	token := strings.TrimPrefix(req.URL.Path, "/sub/")
+	path := strings.Trim(strings.TrimPrefix(req.URL.Path, "/sub/"), "/")
+	parts := strings.Split(path, "/")
+	token := ""
+	if len(parts) > 0 {
+		token = strings.TrimSpace(parts[0])
+	}
 	if token == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
+	format := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("format")))
+	if format == "" {
+		format = strings.ToLower(strings.TrimSpace(req.URL.Query().Get("target")))
+	}
+	if format == "" && len(parts) > 1 {
+		format = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	isClash := format == "clash" || format == "clash-meta" || format == "mihomo" || format == "yaml" || format == "yml"
+
 	r.store.Mu.RLock()
 	defer r.store.Mu.RUnlock()
 	var client model.Client
@@ -41,7 +56,7 @@ func (r *Router) subscription(w http.ResponseWriter, req *http.Request) {
 		allowed[id] = true
 	}
 	fixedExitOnly := len(client.RelayRouteIDs) > 0 && len(client.NodeIDs) == 0
-	lines := []string{}
+	nodes := []model.Node{}
 	for _, n := range r.store.Data.Nodes {
 		if !n.Enabled {
 			continue
@@ -55,14 +70,33 @@ func (r *Router) subscription(w http.ResponseWriter, req *http.Request) {
 		if strings.ToLower(n.Protocol) != "vless" {
 			continue
 		}
-		lines = append(lines, buildVlessShareLink(n, client))
+		nodes = append(nodes, n)
 	}
+	relays := []model.RelayRoute{}
 	for _, rid := range client.RelayRouteIDs {
 		if rr, ok := r.store.Data.RelayRoutes[rid]; ok && rr.Enabled && rr.RouteMode == "socks5_route" {
-			lines = append(lines, buildRelayShareLink(rr, client))
+			relays = append(relays, rr)
 		}
 	}
+	if isClash {
+		yaml := buildClashMetaSubscription(nodes, relays, client, r.store.Data.NetworkPolicy)
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if req.URL.Query().Get("download") == "1" || (len(parts) > 2 && strings.ToLower(parts[2]) == "download") {
+			w.Header().Set("Content-Disposition", "attachment; filename=\"zxy-clash.yaml\"")
+		}
+		_, _ = w.Write([]byte(yaml))
+		return
+	}
+	lines := []string{}
+	for _, n := range nodes {
+		lines = append(lines, buildVlessShareLink(n, client))
+	}
+	for _, rr := range relays {
+		lines = append(lines, buildRelayShareLink(rr, client))
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(strings.Join(lines, "\n")))
 }
 func (r *Router) shortShare(w http.ResponseWriter, req *http.Request) {
@@ -146,6 +180,127 @@ func (r *Router) shortShare(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	http.Error(w, "node not found", http.StatusNotFound)
+}
+
+func yamlQuote(v any) string {
+	b, err := json.Marshal(fmt.Sprint(v))
+	if err != nil {
+		return "\"\""
+	}
+	return string(b)
+}
+
+func nodeHost(n model.Node) string {
+	return valueOr(n.Host, "127.0.0.1")
+}
+
+func nodeShareName(n model.Node) string {
+	if strings.TrimSpace(n.Name) != "" {
+		return strings.TrimSpace(n.Name)
+	}
+	return fmt.Sprintf("%s:%d", nodeHost(n), n.Port)
+}
+
+func relayShareName(r model.RelayRoute) string {
+	if strings.TrimSpace(r.Name) != "" {
+		return strings.TrimSpace(r.Name)
+	}
+	return fmt.Sprintf("%s:%d", valueOr(r.RelayHost, "127.0.0.1"), r.RelayPort)
+}
+
+func buildClashProxyLines(name, host string, port int, uuid, security, transport, sni, fingerprint, publicKey, shortID, spiderX, path string) []string {
+	security = strings.ToLower(valueOr(security, "none"))
+	transport = strings.ToLower(valueOr(transport, "tcp"))
+	lines := []string{}
+	lines = append(lines, fmt.Sprintf("  - name: %s", yamlQuote(name)))
+	lines = append(lines, "    type: vless")
+	lines = append(lines, fmt.Sprintf("    server: %s", yamlQuote(host)))
+	lines = append(lines, fmt.Sprintf("    port: %d", port))
+	lines = append(lines, fmt.Sprintf("    uuid: %s", yamlQuote(uuid)))
+	lines = append(lines, fmt.Sprintf("    network: %s", yamlQuote(transport)))
+	lines = append(lines, "    udp: true")
+	if security == "reality" || security == "tls" {
+		lines = append(lines, "    tls: true")
+		if strings.TrimSpace(sni) != "" {
+			lines = append(lines, fmt.Sprintf("    servername: %s", yamlQuote(sni)))
+		}
+		lines = append(lines, fmt.Sprintf("    client-fingerprint: %s", yamlQuote(valueOr(fingerprint, "chrome"))))
+		lines = append(lines, "    skip-cert-verify: false")
+	} else {
+		lines = append(lines, "    tls: false")
+	}
+	if security == "reality" {
+		lines = append(lines, "    reality-opts:")
+		lines = append(lines, fmt.Sprintf("      public-key: %s", yamlQuote(publicKey)))
+		if strings.TrimSpace(shortID) != "" {
+			lines = append(lines, fmt.Sprintf("      short-id: %s", yamlQuote(shortID)))
+		}
+	}
+	if transport == "ws" && strings.TrimSpace(path) != "" {
+		lines = append(lines, "    ws-opts:")
+		lines = append(lines, fmt.Sprintf("      path: %s", yamlQuote(path)))
+	}
+	if transport == "grpc" && strings.TrimSpace(path) != "" {
+		lines = append(lines, "    grpc-opts:")
+		lines = append(lines, fmt.Sprintf("      grpc-service-name: %s", yamlQuote(strings.Trim(path, "/"))))
+	}
+	return lines
+}
+
+func buildClashMetaSubscription(nodes []model.Node, relays []model.RelayRoute, client model.Client, policy model.NetworkPolicy) string {
+	proxyLines := []string{}
+	proxyNames := []string{}
+	for _, n := range nodes {
+		name := nodeShareName(n)
+		proxyNames = append(proxyNames, name)
+		proxyLines = append(proxyLines, buildClashProxyLines(name, nodeHost(n), n.Port, client.UUID, n.Security, valueOr(n.Transport, "tcp"), n.SNI, n.Fingerprint, n.RealityPublicKey, n.RealityShortID, n.RealitySpiderX, n.Path)...)
+	}
+	for _, rr := range relays {
+		name := relayShareName(rr)
+		proxyNames = append(proxyNames, name)
+		proxyLines = append(proxyLines, buildClashProxyLines(name, valueOr(rr.RelayHost, "127.0.0.1"), rr.RelayPort, client.UUID, "reality", "tcp", valueOr(rr.RelaySNI, "www.intel.com"), valueOr(rr.RelayFingerprint, "chrome"), rr.RelayRealityPublicKey, rr.RelayRealityShortID, rr.RelayRealitySpiderX, "")...)
+	}
+	nameservers := []string{"    - 1.1.1.1", "    - 8.8.8.8"}
+	if policy.ClashIncludeQuad9 {
+		nameservers = append(nameservers, "    - 9.9.9.9")
+	}
+	groupProxies := []string{}
+	for _, name := range proxyNames {
+		groupProxies = append(groupProxies, fmt.Sprintf("      - %s", yamlQuote(name)))
+	}
+	groupProxies = append(groupProxies, "      - DIRECT")
+	if len(proxyLines) == 0 {
+		proxyLines = []string{"  []"}
+	}
+	lines := []string{
+		"# ZXY Panel Clash Verge / Mihomo profile",
+		"# 仅支持 Clash Meta / Mihomo / Clash Verge Rev，旧版 Clash 不支持 VLESS Reality。",
+		"mixed-port: 7890",
+		"allow-lan: false",
+		"mode: rule",
+		"log-level: info",
+		"ipv6: false",
+		"global-client-fingerprint: chrome",
+		"unified-delay: true",
+		"tcp-concurrent: true",
+		"dns:",
+		"  enable: true",
+		"  ipv6: false",
+		"  enhanced-mode: fake-ip",
+		"  nameserver:",
+	}
+	lines = append(lines, nameservers...)
+	lines = append(lines, "proxies:")
+	lines = append(lines, proxyLines...)
+	lines = append(lines, "proxy-groups:")
+	lines = append(lines, "  - name: PROXY")
+	lines = append(lines, "    type: select")
+	lines = append(lines, "    proxies:")
+	lines = append(lines, groupProxies...)
+	lines = append(lines, "rules:")
+	lines = append(lines, "  - MATCH,PROXY")
+	lines = append(lines, "")
+	return strings.Join(lines, "\n")
 }
 
 func buildVlessShareLink(n model.Node, client model.Client) string {

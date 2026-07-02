@@ -1,6 +1,6 @@
 {
   "name": "zxy-panel-frontend",
-  "version": "0.7.6.4",
+  "version": "0.7.7.1",
   "private": true,
   "type": "module",
   "scripts": {

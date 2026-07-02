@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { copyText } from '../clipboard'
-import { buildClientMultiShare, buildShortNodeUrl, buildSubscriptionUrl, isClientShareNode, isQrShareFormat, nodesForClient, qrImageUrl, relayNodesForClient, shareFormatLabel, shareFormatOptions, type ShareFormat } from '../share'
+import { buildClashDownloadUrl, buildClashSubscriptionUrl, buildClientMultiShare, buildShortNodeUrl, buildSubscriptionUrl, isClientShareNode, isQrShareFormat, nodesForClient, qrImageUrl, relayNodesForClient, shareFormatLabel, shareFormatOptions, type ShareFormat } from '../share'
 
 type ShareTab = ShareFormat | 'subscription'
 
@@ -201,6 +201,8 @@ async function saveClient() {
 async function remove(id:string) { if(!confirm('确认删除这个客户？')) return; await api(`/api/clients/${id}`,{method:'DELETE'}); await load() }
 async function reset(id:string) { if(!confirm('确认重置订阅？旧订阅链接会失效。')) return; await api(`/api/clients/${id}/reset-token`,{method:'POST'}); await load() }
 function subUrl(c:any) { return buildSubscriptionUrl(c) }
+function clashSubUrl(c:any) { return buildClashSubscriptionUrl(c) }
+function clashDownloadUrl(c:any) { return buildClashDownloadUrl(c) }
 async function copySub(c:any) {
   const ok = await copyText(subUrl(c))
   message.value = ok ? '完整订阅链接已复制。' : '浏览器禁止自动复制，请点击“分享”后手动复制订阅链接。'
@@ -292,6 +294,10 @@ function shareCopyLabel() {
   if (shareTab.value === 'subscription') return '订阅链接'
   return shareFormatLabel(shareTab.value as ShareFormat)
 }
+function copyClashRemoteUrl() {
+  if (!shareClient.value) return
+  copyAny(clashSubUrl(shareClient.value), 'Clash Verge 专用订阅链接')
+}
 function showQrForMainShare() {
   return shareTab.value === 'subscription' || isQrShareFormat(shareTab.value as ShareFormat)
 }
@@ -317,7 +323,7 @@ onMounted(load)
 </script>
 <template>
   <div v-if="copyToast" class="copy-toast">{{ copyToast }}</div>
-  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.6.4 客户管理稳定版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">客户管理</h1><p class="page-desc">V0.7.7.1 客户管理稳定版：固定出口客户通过弹窗创建，客户入口与出口关系更清晰。</p></div></div>
 
   <div class="client-summary-grid">
     <div class="client-summary-card"><span>客户总数</span><strong>{{ clientStats.total }}</strong></div>
@@ -490,11 +496,11 @@ onMounted(load)
           <strong>{{ opt.label }}</strong><span>{{ opt.tip }}</span>
         </button>
       </div>
-      <div class="notice warn modal-tip">{{ shareTip }}<br>默认二维码为 vless:// 单节点链接；订阅二维码只用于批量更新，HTTP 订阅可能被 v2rayN 拦截。</div>
+      <div class="notice warn modal-tip">{{ shareTip }}<br>默认二维码为 vless:// 单节点链接；订阅二维码只用于批量更新，HTTP 订阅可能被 v2rayN 拦截。<br v-if="shareTab === 'clash'"><span v-if="shareTab === 'clash'">Clash Verge 请使用 Mihomo / Clash Meta 内核；旧版 Clash 不支持 VLESS Reality。优先复制“Clash Verge 订阅链接”到 Remote，或下载 yaml 后作为本地配置导入。</span></div>
       <div v-if="!shareAvailableNodes.length && shareTab !== 'subscription'" class="empty-state">该客户暂无可用入站，请先新增入站或检查客户关联入站。</div>
       <div v-else class="share-modal-body">
         <div class="share-config-box">
-          <div class="share-config-head"><strong>{{ shareHeading() }}</strong><button class="btn" @click="copyAny(shareText, shareCopyLabel())">复制{{ shareCopyLabel() }}</button></div>
+          <div class="share-config-head"><strong>{{ shareHeading() }}</strong><div class="inline-actions"><template v-if="shareTab === 'clash' && shareClient"><button class="btn secondary" @click="copyClashRemoteUrl">复制 Clash Verge 订阅链接</button><a class="btn secondary" :href="clashDownloadUrl(shareClient)" download="zxy-clash.yaml">下载 clash.yaml</a></template><button class="btn" @click="copyAny(shareText, shareCopyLabel())">复制{{ shareCopyLabel() }}</button></div></div>
           <pre class="code share-pre">{{ shareText }}</pre>
         </div>
         <div v-if="showQrForMainShare()" class="qr-box share-modal-qr big-share-qr">

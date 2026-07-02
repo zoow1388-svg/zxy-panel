@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.6.4-install-speed-polish-agent-xray"
+VERSION="0.7.7.1-clash-import-polish-agent-xray"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"
@@ -238,6 +238,80 @@ install_docker_if_missing() {
   fi
 }
 
+
+installer_backup_existing() {
+  step "Pre-install backup"
+  local has_existing="false"
+  for item in \
+    "$APP_DIR/data/zxy-panel.json" \
+    "$APP_DIR/.env" \
+    "$INFO_FILE" \
+    "/etc/zxy-panel/xray/config.json" \
+    "/etc/nginx/conf.d/zxy-panel.conf" \
+    "/etc/systemd/system/zxy-panel-api.service" \
+    "/etc/systemd/system/zxy-agent.service" \
+    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"; do
+    if [[ -e "$item" ]]; then
+      has_existing="true"
+      break
+    fi
+  done
+
+  if [[ "$has_existing" != "true" ]]; then
+    echo "No existing ZXY Panel data/config found, skip pre-install backup."
+    return 0
+  fi
+
+  local backup_dir ts tmp root backup item copied=0
+  backup_dir="$APP_DIR/backups"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  backup="$backup_dir/zxy-panel-backup-${ts}.tar.gz"
+  mkdir -p "$backup_dir"
+  tmp="$(mktemp -d)"
+  root="$tmp/root"
+  mkdir -p "$root"
+
+  cat > "$root/zxy-backup-meta.txt" <<EOF_META
+ZXY Panel backup
+created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+reason=pre-install
+source_host=$(hostname 2>/dev/null || echo unknown)
+from_version=$(panel_info_value VERSION || true)
+to_version=${VERSION}
+install_mode=$(panel_info_value INSTALL_MODE || true)
+EOF_META
+
+  local items=(
+    "$APP_DIR/data/zxy-panel.json"
+    "$APP_DIR/.env"
+    "$INFO_FILE"
+    "/etc/zxy-panel/xray/config.json"
+    "/etc/nginx/conf.d/zxy-panel.conf"
+    "/etc/systemd/system/zxy-panel-api.service"
+    "/etc/systemd/system/zxy-agent.service"
+    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"
+  )
+
+  for item in "${items[@]}"; do
+    if [[ -e "$item" ]]; then
+      mkdir -p "$root$(dirname "$item")"
+      cp -a "$item" "$root$item"
+      copied=$((copied+1))
+    fi
+  done
+
+  if [[ "$copied" -eq 0 ]]; then
+    rm -rf "$tmp"
+    echo "No backup items copied, skip."
+    return 0
+  fi
+
+  tar -C "$root" -czf "$backup" .
+  chmod 600 "$backup" 2>/dev/null || true
+  rm -rf "$tmp"
+  echo "Pre-install backup created: $backup"
+}
+
 cleanup_old_runtime() {
   step "Cleaning old ZXY Panel runtime"
   systemctl stop zxy-panel-api 2>/dev/null || true
@@ -455,6 +529,9 @@ print_result() {
   echo "  zxy-panel restart"
   echo "  zxy-panel logs"
   echo "  zxy-panel doctor"
+  echo "  zxy-panel backup"
+  echo "  zxy-panel backup-list"
+  echo "  zxy-panel restore [backup-file]"
   echo "  zxy-panel reset-password"
   echo
   echo "Important: open TCP port ${PANEL_PORT} in your cloud firewall/security group for panel access."
@@ -628,8 +705,9 @@ main() {
     echo "Docker compatibility mode: no prebuilt fast assets found."
   fi
 
-  cleanup_old_runtime
   install_base_deps
+  installer_backup_existing
+  cleanup_old_runtime
   disable_default_nginx_sites
 
   if [[ "$INSTALL_MODE" == "docker" ]]; then

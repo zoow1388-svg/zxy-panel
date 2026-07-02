@@ -82,6 +82,128 @@ recent_xray_restart_count() {
 }
 
 
+backup_timestamp() {
+  date +%Y%m%d-%H%M%S
+}
+
+backup_dir() {
+  echo "$APP_DIR/backups"
+}
+
+mask_secret() {
+  local v="${1:-}"
+  if [[ -z "$v" ]]; then
+    echo "unknown"
+  else
+    echo "********"
+  fi
+}
+
+latest_backup_file() {
+  local dir
+  dir="$(backup_dir)"
+  find "$dir" -maxdepth 1 -type f -name 'zxy-panel-backup-*.tar.gz' 2>/dev/null | sort | tail -n1
+}
+
+create_backup() {
+  local reason="${1:-manual}"
+  local dir ts tmp root backup item copied=0
+  dir="$(backup_dir)"
+  ts="$(backup_timestamp)"
+  backup="$dir/zxy-panel-backup-${ts}.tar.gz"
+  mkdir -p "$dir"
+  tmp="$(mktemp -d)"
+  root="$tmp/root"
+  mkdir -p "$root"
+
+  cat > "$root/zxy-backup-meta.txt" <<EOF_META
+ZXY Panel backup
+created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+reason=${reason}
+source_host=$(hostname 2>/dev/null || echo unknown)
+version=$(get_info VERSION || true)
+install_mode=$(get_info INSTALL_MODE || true)
+EOF_META
+
+  local items=(
+    "$APP_DIR/data/zxy-panel.json"
+    "$APP_DIR/.env"
+    "$PANEL_INFO"
+    "/etc/zxy-panel/xray/config.json"
+    "/etc/nginx/conf.d/zxy-panel.conf"
+    "/etc/systemd/system/zxy-panel-api.service"
+    "/etc/systemd/system/zxy-agent.service"
+    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"
+  )
+
+  for item in "${items[@]}"; do
+    if [[ -e "$item" ]]; then
+      mkdir -p "$root$(dirname "$item")"
+      cp -a "$item" "$root$item"
+      copied=$((copied+1))
+    fi
+  done
+
+  if [[ "$copied" -eq 0 ]]; then
+    rm -rf "$tmp"
+    echo "No existing ZXY Panel files found, backup skipped."
+    return 0
+  fi
+
+  tar -C "$root" -czf "$backup" .
+  chmod 600 "$backup" 2>/dev/null || true
+  rm -rf "$tmp"
+  echo "$backup"
+}
+
+print_backup_list() {
+  local dir
+  dir="$(backup_dir)"
+  echo "ZXY Panel Backups"
+  echo "=============================="
+  echo "Directory: $dir"
+  if [[ ! -d "$dir" ]]; then
+    echo "No backup directory found."
+    return 0
+  fi
+  local files
+  files=$(find "$dir" -maxdepth 1 -type f -name 'zxy-panel-backup-*.tar.gz' 2>/dev/null | sort -r || true)
+  if [[ -z "$files" ]]; then
+    echo "No backups found."
+    return 0
+  fi
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    printf "%s  %s\n" "$(du -h "$f" | awk '{print $1}')" "$f"
+  done <<< "$files"
+}
+
+restore_backup() {
+  local backup="${1:-}"
+  if [[ -z "$backup" ]]; then
+    backup="$(latest_backup_file)"
+  fi
+  if [[ -z "$backup" || ! -f "$backup" ]]; then
+    echo "Backup file not found. Use: zxy-panel backup-list"
+    exit 1
+  fi
+  echo "Restoring backup: $backup"
+  echo "Creating safety backup before restore..."
+  create_backup "pre-restore" >/dev/null || true
+  tar -xzf "$backup" -C /
+  chmod 600 "$APP_DIR/.env" 2>/dev/null || true
+  chmod 600 "$PANEL_INFO" 2>/dev/null || true
+  chmod 600 /etc/zxy-panel/xray/config.json 2>/dev/null || true
+  systemctl daemon-reload || true
+  systemctl restart zxy-panel-api 2>/dev/null || true
+  systemctl restart zxy-agent 2>/dev/null || true
+  systemctl restart xray 2>/dev/null || true
+  systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
+  echo "Restore completed. Running doctor..."
+  zxy-panel doctor || true
+}
+
+
 case "${1:-}" in
   info)
     if [[ ! -f "$PANEL_INFO" ]]; then
@@ -90,22 +212,38 @@ case "${1:-}" in
     fi
     USERNAME=$(get_info USERNAME)
     PASSWORD=$(get_info PASSWORD)
+    API_TOKEN=$(get_info API_TOKEN)
     PORT=$(get_info PORT)
     WEB_BASE_PATH=$(get_info WEB_BASE_PATH)
     ACCESS_URL=$(get_info ACCESS_URL)
     DATABASE=$(get_info DATABASE)
     VERSION=$(get_info VERSION)
     MODE=$(get_info INSTALL_MODE)
+    SHOW_SECRET="false"
+    if [[ "${2:-}" == "--show-secret" ]]; then
+      SHOW_SECRET="true"
+    fi
+    if [[ "$SHOW_SECRET" == "true" ]]; then
+      PASSWORD_DISPLAY="${PASSWORD:-unknown}"
+      API_TOKEN_DISPLAY="${API_TOKEN:-unknown}"
+    else
+      PASSWORD_DISPLAY="$(mask_secret "${PASSWORD:-}")"
+      API_TOKEN_DISPLAY="$(mask_secret "${API_TOKEN:-}")"
+    fi
     echo "ZXY Panel Info"
     echo "=============================="
     printf "%-12s %s\n" "Version:" "${VERSION:-unknown}"
     printf "%-12s %s\n" "Mode:" "${MODE:-docker}"
     printf "%-12s %s\n" "Username:" "${USERNAME:-unknown}"
-    printf "%-12s %s\n" "Password:" "${PASSWORD:-unknown}"
+    printf "%-12s %s\n" "Password:" "$PASSWORD_DISPLAY"
+    printf "%-12s %s\n" "API Token:" "$API_TOKEN_DISPLAY"
     printf "%-12s %s\n" "Port:" "${PORT:-unknown}"
     printf "%-12s %s\n" "WebPath:" "${WEB_BASE_PATH:-unknown}"
     printf "%-12s %s\n" "Database:" "${DATABASE:-unknown}"
     printf "%-12s %s\n" "Access URL:" "${ACCESS_URL:-unknown}"
+    if [[ "$SHOW_SECRET" != "true" ]]; then
+      echo "Tip: use 'zxy-panel info --show-secret' to display Password and API Token."
+    fi
     echo
     echo "Reminder: open the panel port and every node inbound port in your cloud firewall/security group."
     ;;
@@ -287,6 +425,27 @@ PY
       WARNS=$((WARNS+1))
     fi
 
+    BACKUP_DIR="$(backup_dir)"
+    if [[ -d "$BACKUP_DIR" ]]; then
+      LATEST_BACKUP="$(latest_backup_file || true)"
+      if [[ -n "$LATEST_BACKUP" ]]; then
+        status_line "Backup status" ok "latest: $LATEST_BACKUP"
+      else
+        status_line "Backup status" warn "backup directory exists but no backup file found"
+        WARNS=$((WARNS+1))
+      fi
+    else
+      status_line "Backup status" warn "backup directory missing"
+      WARNS=$((WARNS+1))
+    fi
+
+    if [[ -f "$APP_DIR/data/zxy-panel.json" ]]; then
+      status_line "Data file" ok "$APP_DIR/data/zxy-panel.json"
+    else
+      status_line "Data file" fail "missing: $APP_DIR/data/zxy-panel.json"
+      FAILS=$((FAILS+1))
+    fi
+
     RESTART_LINES=$(recent_xray_restart_count || echo 0)
     if [[ "${RESTART_LINES:-0}" -gt 8 ]]; then
       status_line "Xray restart watch" warn "recent restart/config lines in 3 minutes: ${RESTART_LINES}"
@@ -303,6 +462,21 @@ PY
     echo "Doctor result: FAIL (${FAILS} failure(s), ${WARNS} warning(s))"
     echo "Tip: run 'zxy-panel logs' or 'journalctl -u zxy-panel-api -u zxy-agent -u xray -u nginx -n 120 --no-pager'."
     exit 1
+    ;;
+
+  backup)
+    BACKUP_FILE="$(create_backup "manual")"
+    if [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]]; then
+      echo "Backup created: $BACKUP_FILE"
+    fi
+    ;;
+
+  backup-list)
+    print_backup_list
+    ;;
+
+  restore)
+    restore_backup "${2:-}"
     ;;
 
   update)
@@ -371,6 +545,9 @@ PY_UPDATE
     echo "  zxy-panel restart"
     echo "  zxy-panel logs"
     echo "  zxy-panel reset-password"
+    echo "  zxy-panel backup"
+    echo "  zxy-panel backup-list"
+    echo "  zxy-panel restore [backup-file]"
     echo "  zxy-panel update"
     echo "  zxy-panel uninstall"
     ;;

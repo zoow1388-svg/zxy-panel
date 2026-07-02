@@ -1,0 +1,26 @@
+ZXY Panel V0.7.7.1 clash-import-polish release audit
+
+Version: 0.7.7.1-clash-import-polish-agent-xray
+Package: zxy-panel-v0.7.7.1-clash-import-polish.zip
+SHA256: 8f0a83a860a9b56e7a5e1df3445c7fd824af6b0d07c25e25de716615fae5da14
+
+Build / validation:
+- backend go test ./...: PASS
+- agent go test ./...: PASS
+- frontend npm run build: PASS
+- bash -n install.sh/deploy scripts/scripts/zxy-panel: PASS
+- Linux ZIP path separator check: PASS
+
+Scope:
+- Added Clash Verge / Mihomo remote subscription endpoint: /sub/<token>?format=clash
+- Added Clash YAML download: /sub/<token>?format=clash&download=1
+- Added customer share modal buttons: copy Clash Verge URL, download clash.yaml
+- Improved Clash Meta YAML compatibility and user warnings
+
+Not changed:
+- Client management core CRUD
+- Inbound management core logic
+- Xray config apply logic
+- Reality share URI flow behavior
+- Agent apply hash logic
+- Network policy core behavior

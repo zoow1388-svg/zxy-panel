@@ -4,8 +4,8 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 
 ## 当前版本
 
-- 稳定版本：`0.7.6.4-install-speed-polish-agent-xray`
-- 发布标签：`v0.7.6.4`
+- 稳定版本：`0.7.7.1-clash-import-polish-agent-xray`
+- 发布标签：`v0.7.7.1`
 - 发布时间：`2026-07-01`
 
 ## 功能列表
@@ -60,9 +60,9 @@ zxy-panel update
 zxy-panel uninstall
 ```
 
-## V0.7.6.4 安装速度优化
+## V0.7.7.1 安装速度优化
 
-V0.7.6.4 不改业务核心功能，只优化安装体验：
+V0.7.7.1 不改业务核心功能，只优化安装体验：
 
 - 已安装依赖时跳过 apt 安装。
 - 已安装 Xray-core 时默认跳过重新下载。
@@ -73,7 +73,7 @@ V0.7.6.4 不改业务核心功能，只优化安装体验：
 
 ## 安装后自检
 
-V0.7.6.4 新增安装后自检命令：
+V0.7.7.1 新增安装后自检命令：
 
 ```bash
 zxy-panel doctor
@@ -134,5 +134,5 @@ zxy-panel/
 - `V0.7.5.2-install-optimized-agent-xray`：优化一键安装速度，修复安装完成后访问地址缺少 WebBasePath 的问题，自动写入 `ZXY_UPDATE_MANIFEST_URL`，优化 docker-compose 兼容和安装提示。
 - `V0.7.5.3-ca-cert-fix-agent-xray`：修复后端 API 容器缺少 ca-certificates 导致系统升级页无法通过 HTTPS 读取远程版本清单的问题。
 - `V0.7.5.4-dns-stability-agent-xray`：增强服务端 Xray DNS 稳定策略，固定公共 DNS，启用 UseIPv4，禁用 DNS fallback，并增加 DNS 请求阻断规则。
-- `V0.7.6.4-install-speed-polish-agent-xray`：新增“高级：网络策略”，DNS、IPv6、QUIC、UDP、53 端口阻断和中国公共 DNS 阻断改为用户手动配置，默认不启用强阻断。
+- `V0.7.7.1-clash-import-polish-agent-xray`：新增“高级：网络策略”，DNS、IPv6、QUIC、UDP、53 端口阻断和中国公共 DNS 阻断改为用户手动配置，默认不启用强阻断。
 - 后续版本：继续完善自动升级、Agent 管理、版本回滚和部署诊断能力。

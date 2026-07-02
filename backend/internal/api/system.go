@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.6.4-install-speed-polish-agent-xray"
+const panelVersion = "0.7.7.1-clash-import-polish-agent-xray"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {

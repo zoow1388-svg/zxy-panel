@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.7.1}"
-CODENAME="clash-import-polish"
+VERSION="${1:-0.7.7.5}"
+CODENAME="${2:-stability-polish}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
@@ -41,6 +41,7 @@ rsync -a \
   --exclude 'dist-release' \
   --exclude 'releases' \
   --exclude 'data' \
+  --exclude 'version.json' \
   --exclude '*.zip' \
   --exclude '*.log' \
   --exclude 'frontend/node_modules' \
@@ -53,6 +54,15 @@ rsync -a \
 test -x "$PKG_ROOT/bin/zxy-panel-api-linux-amd64"
 test -x "$PKG_ROOT/bin/zxy-agent-linux-amd64"
 test -f "$PKG_ROOT/frontend/dist/index.html"
+cat > "$PKG_ROOT/PACKAGE-MANIFEST.json" <<JSON_PACKAGE
+{
+  "version": "${VERSION}",
+  "codename": "${CODENAME}",
+  "latest": "${VERSION}-${CODENAME}-agent-xray",
+  "package": "${PKG_NAME}",
+  "note": "Release SHA256 is published in main/version.json and SHA256SUMS. This package manifest intentionally does not include a self-referential archive hash."
+}
+JSON_PACKAGE
 
 python3 - "$TMP_DIR" "$(basename "$PKG_ROOT")" "$PKG_PATH" <<'PYZIP'
 import os, sys, zipfile
@@ -79,13 +89,12 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "changelog": [
-    "新增 Clash Verge / Mihomo 专用远程订阅：/sub/<token>?format=clash",
-    "新增 Clash YAML 下载支持：/sub/<token>?format=clash&download=1",
-    "客户分享弹窗新增复制 Clash Verge 订阅链接、下载 clash.yaml 按钮",
-    "优化 Clash Meta YAML：加入 global-client-fingerprint、unified-delay、tcp-concurrent、DIRECT 备用项和兼容提示",
-    "明确提示仅支持 Mihomo / Clash Meta / Clash Verge Rev，旧版 Clash 不支持 VLESS Reality",
-    "保留 V0.7.7.0 备份、恢复、doctor、敏感信息脱敏能力",
-    "不改客户管理、入站管理、Xray 配置生成、二维码、网络策略和 Agent apply 核心逻辑"
+    "统一 README、CHANGELOG、构建脚本、前端文案、后端版本、Agent 版本和安装脚本版本",
+    "Release 包不再内置带 SHA256 的 version.json，避免发布包内部 manifest 与外部 release manifest hash 不一致",
+    "Fresh install 没有备份、尚未创建客户绑定时，doctor 改为 INFO 提示，不再误报 warning",
+    "客户分享弹窗补充 Clash Verge / Mihomo 使用提示：订阅源端口不是节点端口，导入后需选择节点，内核通信错误需重启内核或客户端",
+    "Clash YAML 顶部增加客户端使用说明，减少导入成功但当前节点为空的误判",
+    "保留 V0.7.7.3 Clash/Mihomo 订阅绑定修复和 V0.7.7.2 BindingCheck、Agent apply 校验、Doctor 深度检测"
   ]}
 JSON
 

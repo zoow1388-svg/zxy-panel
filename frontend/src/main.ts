@@ -13,6 +13,7 @@ import Settings from './views/Settings.vue'
 import Diagnostics from './views/Diagnostics.vue'
 import Updates from './views/Updates.vue'
 import NetworkPolicy from './views/NetworkPolicy.vue'
+import ServerOptimization from './views/ServerOptimization.vue'
 import './style.css'
 import { APP_VERSION } from './version'
 import { runtimeBasePath } from './runtimeBase'
@@ -39,7 +40,8 @@ const router = createRouter({
     { path: '/settings', component: Settings },
     { path: '/diagnostics', component: Diagnostics },
     { path: '/updates', component: Updates },
-    { path: '/network-policy', component: NetworkPolicy }
+    { path: '/network-policy', component: NetworkPolicy },
+    { path: '/server-optimization', component: ServerOptimization }
   ]
 })
 

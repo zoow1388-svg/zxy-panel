@@ -1,5 +1,19 @@
 # Changelog
 
+## V0.7.8 stable-engineering (unreleased)
+
+- Use `VERSION` as the source version baseline and synchronize runtime version labels.
+- Distinguish the source development version from the latest published manifest.
+- Check source versions before building; check the release manifest and package SHA256 after building.
+- Preserve the existing BBR work without changing Xray, Reality, persistence logic, or Agent protocol fields.
+
+## V0.7.7.6 bbr-optimization (unreleased)
+
+- Add host-level BBR detection, enable, and disable controls through the systemd Agent.
+- Enable BBR by default after installation when the kernel supports it; failures do not interrupt installation.
+- Preserve an administrator disable choice across later upgrades.
+- Add the Server Optimization page and BBR status reporting for local and remote Agents.
+
 ## V0.7.7.5 stability-polish
 
 - 统一 README、CHANGELOG、构建脚本、前端文案、后端版本、Agent 版本和安装脚本版本，减少发布包与远程 manifest 不一致问题。

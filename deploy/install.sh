@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.7.7.1-clash-import-polish-agent-xray"
+VERSION="0.7.8-stable-engineering"
 APP_DIR=${APP_DIR:-/opt/zxy-panel}
 CONFIG_DIR=${CONFIG_DIR:-/etc/zxy-panel}
 INFO_FILE="$CONFIG_DIR/panel.info"
@@ -250,7 +250,9 @@ installer_backup_existing() {
     "/etc/nginx/conf.d/zxy-panel.conf" \
     "/etc/systemd/system/zxy-panel-api.service" \
     "/etc/systemd/system/zxy-agent.service" \
-    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"; do
+    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf" \
+    "/etc/sysctl.d/99-zxy-bbr.conf" \
+    "/etc/zxy-panel/bbr.disabled"; do
     if [[ -e "$item" ]]; then
       has_existing="true"
       break
@@ -290,6 +292,8 @@ EOF_META
     "/etc/systemd/system/zxy-panel-api.service"
     "/etc/systemd/system/zxy-agent.service"
     "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"
+    "/etc/sysctl.d/99-zxy-bbr.conf"
+    "/etc/zxy-panel/bbr.disabled"
   )
 
   for item in "${items[@]}"; do
@@ -492,6 +496,40 @@ install_cli() {
   install -m 0755 "$APP_DIR/scripts/zxy-panel" /usr/local/bin/zxy-panel
 }
 
+install_netopt() {
+  step "Installing host network optimization helper"
+  if [[ ! -f "$APP_DIR/scripts/zxy-netopt" ]]; then
+    echo "WARNING: zxy-netopt source is missing; BBR control will be unavailable."
+    return 0
+  fi
+  install -m 0755 "$APP_DIR/scripts/zxy-netopt" /usr/local/bin/zxy-netopt
+}
+
+enable_default_bbr() {
+  if [[ "${ZXY_BBR_AUTO_ENABLE:-true}" != "true" ]]; then
+    echo "BBR auto-enable is disabled by ZXY_BBR_AUTO_ENABLE."
+    return 0
+  fi
+  if ! command -v zxy-netopt >/dev/null 2>&1; then
+    echo "BBR helper is unavailable; skip without affecting panel installation."
+    return 0
+  fi
+
+  step "Checking and enabling BBR network optimization"
+  local result
+  if result="$(ZXY_BBR_AUTO_ENABLE=true zxy-netopt --json enable-bbr 2>&1)"; then
+    printf '%s\n' "$result"
+    if printf '%s' "$result" | grep -q '"enabled": true'; then
+      echo "BBR network optimization enabled."
+    else
+      echo "BBR is unsupported or remains disabled; panel installation continues normally."
+    fi
+  else
+    printf '%s\n' "$result"
+    echo "BBR enable attempt failed; panel installation continues normally."
+  fi
+}
+
 allow_local_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow "${PANEL_PORT}/tcp" || true
@@ -536,6 +574,11 @@ print_result() {
   echo
   echo "Important: open TCP port ${PANEL_PORT} in your cloud firewall/security group for panel access."
   echo "Important: also open every node inbound port you create, otherwise client tools cannot connect."
+  if command -v zxy-netopt >/dev/null 2>&1; then
+    echo
+    echo "BBR network optimization:"
+    zxy-netopt bbr-status || true
+  fi
   echo "Install duration: $(elapsed)"
 }
 
@@ -593,7 +636,7 @@ PY
     echo "WARNING: local server not found, skip Agent auto install."
   else
     chmod +x deploy/agent-install.sh
-    INSTALL_XRAY="$INSTALL_XRAY" SETUP_XRAY_SERVICE="$SETUP_XRAY_SERVICE" ZXY_FORCE_INSTALL_XRAY="$ZXY_FORCE_INSTALL_XRAY" ZXY_SKIP_XRAY_INSTALL="$ZXY_SKIP_XRAY_INSTALL" APPLY_CONFIG=true PANEL_BASE="http://127.0.0.1:${API_PORT}" SERVER_ID="$SERVER_ID" AGENT_TOKEN="$AGENT_TOKEN" ./deploy/agent-install.sh
+    INSTALL_XRAY="$INSTALL_XRAY" SETUP_XRAY_SERVICE="$SETUP_XRAY_SERVICE" ZXY_FORCE_INSTALL_XRAY="$ZXY_FORCE_INSTALL_XRAY" ZXY_SKIP_XRAY_INSTALL="$ZXY_SKIP_XRAY_INSTALL" ZXY_BBR_AUTO_ENABLE="${ZXY_BBR_AUTO_ENABLE:-true}" APPLY_CONFIG=true PANEL_BASE="http://127.0.0.1:${API_PORT}" SERVER_ID="$SERVER_ID" AGENT_TOKEN="$AGENT_TOKEN" ./deploy/agent-install.sh
   fi
 }
 
@@ -759,6 +802,7 @@ main() {
       tar -czf "$APP_DIR/backups/data-before-fresh-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$APP_DIR" data || true
       rm -rf "$APP_DIR/data"
     fi
+    rm -f /etc/zxy-panel/bbr.disabled
   fi
 
   mkdir -p "$APP_DIR/data"
@@ -769,6 +813,7 @@ main() {
   copy_package_files
   cd "$APP_DIR"
   install_cli
+  install_netopt
 
   if [[ -f data/zxy-panel.json && -s data/zxy-panel.json && "$FRESH_INSTALL" != "true" ]]; then
     ADMIN_USERNAME=${EXISTING_USERNAME:-existing-admin}
@@ -790,6 +835,7 @@ main() {
 
   allow_local_firewall
   install_local_agent
+  enable_default_bbr
   post_install_self_check
   print_result
 }

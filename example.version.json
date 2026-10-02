@@ -1,18 +1,15 @@
 {
-  "latest": "0.7.7.1-clash-import-polish-agent-xray",
-  "version": "0.7.7.1",
-  "codename": "clash-import-polish",
-  "package": "zxy-panel-v0.7.7.1-clash-import-polish.zip",
-  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.7.1/zxy-panel-v0.7.7.1-clash-import-polish.zip",
+  "latest": "0.7.8-stable-engineering",
+  "version": "0.7.8",
+  "codename": "stable-engineering",
+  "package": "zxy-panel-v0.7.8-stable-engineering.zip",
+  "download_url": "https://github.com/zoow1388-svg/zxy-panel/releases/download/v0.7.8/zxy-panel-v0.7.8-stable-engineering.zip",
   "sha256": "REPLACE_WITH_SHA256_AFTER_ZIP_BUILD",
   "min_supported_version": "0.7.5",
-  "released_at": "2026-07-01T00:00:00Z",
+  "released_at": "REPLACE_WITH_RELEASE_TIMESTAMP",
   "changelog": [
-    "安装速度优化：外层安装和部署脚本默认使用 noninteractive/needrestart 自动模式，减少安装卡住概率",
-    "安装速度优化：已存在 unzip、curl、ca-certificates、nginx、rsync、python3、iproute2 时直接跳过依赖安装",
-    "安装速度优化：已安装 Xray-core 时默认跳过重新下载，避免重复安装耗时",
-    "新增 ZXY_FORCE_INSTALL_XRAY=1 可强制重装 Xray-core，新增 ZXY_SKIP_XRAY_INSTALL=1 可跳过 Xray 安装",
-    "安装日志增加阶段提示，安装完成后继续自动执行 zxy-panel doctor 自检",
-    "不改客户管理、入站管理、Xray 配置生成、二维码、网络策略和 Agent apply 核心逻辑"
+    "以 VERSION 为源码版本基准，统一前端、后端、Agent 与安装版本",
+    "区分开发状态与 release 状态，构建前检查源码版本，构建后校验发布包 SHA256",
+    "保留已有 BBR 改动，不修改 Xray、Reality、数据库业务逻辑或 Agent 通信协议"
   ]
 }

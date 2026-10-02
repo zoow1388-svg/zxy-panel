@@ -4,7 +4,9 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 
 ## 当前版本
 
-- 稳定测试版本：`0.7.7.5-stability-polish-agent-xray`
+- 源码开发版本：`0.7.8-stable-engineering`
+- 开发状态：未发布；本阶段仅处理版本一致性，保留已有 BBR 改动。
+- 最新已发布版本：`0.7.7.5-stability-polish-agent-xray`
 - 发布标签：`v0.7.7.5`
 - 发布时间：`2026-07-03`
 - 发布包：`zxy-panel-v0.7.7.5-stability-polish.zip`
@@ -107,10 +109,24 @@ Clash Verge 首页显示的“来源：服务器IP:面板端口”是订阅源�
 
 ## 发布一致性说明
 
-`main/version.json` 是一键安装和一键升级读取的远程版本清单。当前主线应保持以下字段一致：
+`VERSION` 是源码版本基准。`version.json` 是一键安装和一键升级读取的发布清单，在新包正式发布前可以低于源码开发版本。现有发布清单保持以下字段：
 
 - `latest`: `0.7.7.5-stability-polish-agent-xray`
 - `version`: `0.7.7.5`
 - `codename`: `stability-polish`
 - `package`: `zxy-panel-v0.7.7.5-stability-polish.zip`
 - `tag`: `v0.7.7.5`
+
+开发状态检查（默认模式）允许发布清单落后于源码，仍会校验清单自身的版本、包名和下载地址是否一致：
+
+```bash
+node scripts/check-version-consistency.mjs --mode dev
+```
+
+发布检查要求清单与源码版本完全一致，并校验实际 ZIP 的 SHA256：
+
+```bash
+node scripts/check-version-consistency.mjs --mode release --manifest dist-release/version.fast.json --package dist-release/zxy-panel-v0.7.8-stable-engineering.zip
+```
+
+构建脚本默认读取 `VERSION`，显式版本参数必须与源码相符。历史 CHANGELOG、旧发布目录、持久化版本元数据和未重新构建的产物不属于源码版本检查范围。发布检查不能代替服务器安装、Agent 或 Xray 功能验收。

@@ -36,6 +36,15 @@ func (r *Router) agentHeartbeat(w http.ResponseWriter, req *http.Request) {
 	s.DiskUsage = body.DiskUsage
 	s.UploadTotal = body.UploadTotal
 	s.DownloadTotal = body.DownloadTotal
+	if body.BBRStatus != nil {
+		body.BBRStatus.CheckedAt = time.Now()
+		s.BBRStatus = *body.BBRStatus
+	}
+	if body.CompletedActionID != "" && s.BBRPendingAction != nil && s.BBRPendingAction.ID == body.CompletedActionID {
+		action := s.BBRPendingAction.Action
+		s.BBRPendingAction = nil
+		r.store.AddLog("agent:"+body.ServerID, "bbr."+action+".complete", req.RemoteAddr, body.CompletedActionResult)
+	}
 	s.UpdatedAt = time.Now()
 	r.store.Data.Servers[s.ID] = s
 	_ = r.store.SaveLocked()
@@ -114,6 +123,7 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 		XrayConfig:          cfg,
 		NextIntervalSeconds: 30,
 		Message:             "config generated",
+		SystemAction:        server.BBRPendingAction,
 	})
 }
 

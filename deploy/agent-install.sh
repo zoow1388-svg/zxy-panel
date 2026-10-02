@@ -15,6 +15,7 @@ ZXY_SKIP_XRAY_INSTALL="${ZXY_SKIP_XRAY_INSTALL:-0}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DST="/usr/local/bin/zxy-agent"
+NETOPT_DST="/usr/local/bin/zxy-netopt"
 
 if [[ -z "$SERVER_ID" || -z "$AGENT_TOKEN" ]]; then
   echo "ERROR: SERVER_ID and AGENT_TOKEN are required."
@@ -24,9 +25,9 @@ fi
 
 install_local_xray_if_available() {
   local xray_src=""
-  if [[ -x "$ROOT_DIR/bin/xray-linux-amd64" ]]; then
+  if [[ -f "$ROOT_DIR/bin/xray-linux-amd64" ]]; then
     xray_src="$ROOT_DIR/bin/xray-linux-amd64"
-  elif [[ -x "$ROOT_DIR/bin/xray" ]]; then
+  elif [[ -f "$ROOT_DIR/bin/xray" ]]; then
     xray_src="$ROOT_DIR/bin/xray"
   fi
 
@@ -76,9 +77,9 @@ else
 fi
 
 BIN_SRC=""
-if [[ -x "$ROOT_DIR/bin/zxy-agent-linux-amd64" ]]; then
+if [[ -f "$ROOT_DIR/bin/zxy-agent-linux-amd64" ]]; then
   BIN_SRC="$ROOT_DIR/bin/zxy-agent-linux-amd64"
-elif [[ -x "$ROOT_DIR/bin/zxy-agent" ]]; then
+elif [[ -f "$ROOT_DIR/bin/zxy-agent" ]]; then
   BIN_SRC="$ROOT_DIR/bin/zxy-agent"
 fi
 
@@ -94,6 +95,11 @@ if [[ -z "$BIN_SRC" ]]; then
 fi
 
 install -m 0755 "$BIN_SRC" "$BIN_DST"
+if [[ -f "$ROOT_DIR/scripts/zxy-netopt" ]]; then
+  install -m 0755 "$ROOT_DIR/scripts/zxy-netopt" "$NETOPT_DST"
+else
+  echo "WARNING: zxy-netopt source is missing; BBR controls will be unavailable on this server."
+fi
 mkdir -p /etc/zxy-panel/xray
 cat > /etc/zxy-panel/agent.env <<ENV
 ZXY_PANEL_BASE=${PANEL_BASE}
@@ -142,6 +148,11 @@ SERVICE
 systemctl daemon-reload
 systemctl enable zxy-agent
 systemctl restart zxy-agent
+
+if [[ "${ZXY_BBR_AUTO_ENABLE:-true}" == "true" && -x "$NETOPT_DST" ]]; then
+  echo "Checking and enabling BBR network optimization..."
+  ZXY_BBR_AUTO_ENABLE=true "$NETOPT_DST" enable-bbr || true
+fi
 
 echo "ZXY Agent installed."
 echo "Check status: systemctl status zxy-agent --no-pager"

@@ -1,30 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.7.7.5}"
-CODENAME="${2:-stability-polish}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+SOURCE_NUMBER="${SOURCE_VERSION%%-*}"
+SOURCE_CODENAME="${SOURCE_VERSION#*-}"
+VERSION="${1:-$SOURCE_NUMBER}"
+CODENAME="${2:-$SOURCE_CODENAME}"
+if [[ "$VERSION-$CODENAME" != "$SOURCE_VERSION" ]]; then
+  echo "ERROR: build version $VERSION-$CODENAME does not match VERSION ($SOURCE_VERSION)"
+  exit 1
+fi
+command -v node >/dev/null 2>&1 || { echo "ERROR: node not found"; exit 1; }
+node "$ROOT_DIR/scripts/check-version-consistency.mjs" --mode dev
 OUT_DIR="$ROOT_DIR/dist-release"
 PKG_NAME="zxy-panel-v${VERSION}-${CODENAME}.zip"
 PKG_PATH="$OUT_DIR/$PKG_NAME"
-
-export CGO_ENABLED=0
-export GOOS=linux
-export GOARCH=amd64
+PYTHON_BIN="${PYTHON3:-python3}"
+TARGET_GOOS=linux
+TARGET_GOARCH=amd64
+HOST_GOOS="$(go env GOOS)"
 
 command -v go >/dev/null 2>&1 || { echo "ERROR: go not found"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "ERROR: npm not found"; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found"; exit 1; }
+if [[ ! -x "$PYTHON_BIN" ]] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "ERROR: python3 not found"
+  exit 1
+fi
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR" "$ROOT_DIR/bin"
 
 echo "[1/5] Building backend API binary"
-(cd "$ROOT_DIR/backend" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
+if [[ "$HOST_GOOS" == "linux" ]]; then
+  (cd "$ROOT_DIR/backend" && go test ./...)
+else
+  echo "Non-Linux host: running backend tests locally before Linux cross-build."
+  (cd "$ROOT_DIR/backend" && go test ./...)
+fi
+(cd "$ROOT_DIR/backend" && CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-panel-api-linux-amd64" ./cmd/server)
 chmod +x "$ROOT_DIR/bin/zxy-panel-api-linux-amd64"
 
 echo "[2/5] Building agent binary"
-(cd "$ROOT_DIR/agent" && go test ./... && go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
+if [[ "$HOST_GOOS" == "linux" ]]; then
+  (cd "$ROOT_DIR/agent" && go test ./...)
+else
+  echo "Non-Linux host: Agent runtime tests require Linux; validating with a Linux amd64 cross-build."
+fi
+(cd "$ROOT_DIR/agent" && CGO_ENABLED=0 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build -trimpath -ldflags='-s -w' -o "$ROOT_DIR/bin/zxy-agent-linux-amd64" ./cmd/agent)
 chmod +x "$ROOT_DIR/bin/zxy-agent-linux-amd64"
 
 echo "[3/5] Building frontend dist"
@@ -35,37 +58,58 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 PKG_ROOT="$TMP_DIR/zxy-panel-v${VERSION}-${CODENAME}"
 mkdir -p "$PKG_ROOT"
-rsync -a \
-  --exclude '.git' \
-  --exclude '.github' \
-  --exclude 'dist-release' \
-  --exclude 'releases' \
-  --exclude 'data' \
-  --exclude 'version.json' \
-  --exclude '*.zip' \
-  --exclude '*.log' \
-  --exclude 'frontend/node_modules' \
-  --exclude 'backend/tmp' \
-  --exclude 'agent/tmp' \
-  --exclude '*.tsbuildinfo' \
-  "$ROOT_DIR/" "$PKG_ROOT/"
 
-# Ensure fast assets are included.
-test -x "$PKG_ROOT/bin/zxy-panel-api-linux-amd64"
-test -x "$PKG_ROOT/bin/zxy-agent-linux-amd64"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a \
+    --exclude '.git' \
+    --exclude '.github' \
+    --exclude 'dist-release' \
+    --exclude 'releases' \
+    --exclude 'data' \
+    --exclude 'version.json' \
+    --exclude '*.zip' \
+    --exclude '*.log' \
+    --exclude 'frontend/node_modules' \
+    --exclude 'backend/tmp' \
+    --exclude 'agent/tmp' \
+    --exclude 'video_review_frames' \
+    --exclude '*.tsbuildinfo' \
+    "$ROOT_DIR/" "$PKG_ROOT/"
+else
+  echo "rsync not found; using a temporary copy fallback."
+  cp -a "$ROOT_DIR/." "$PKG_ROOT/"
+  rm -rf \
+    "$PKG_ROOT/.git" \
+    "$PKG_ROOT/.github" \
+    "$PKG_ROOT/dist-release" \
+    "$PKG_ROOT/releases" \
+    "$PKG_ROOT/data" \
+    "$PKG_ROOT/frontend/node_modules" \
+    "$PKG_ROOT/backend/tmp" \
+    "$PKG_ROOT/agent/tmp" \
+    "$PKG_ROOT/video_review_frames"
+  find "$PKG_ROOT" -type f \( -name '*.zip' -o -name '*.log' -o -name '*.tsbuildinfo' -o -name 'version.json' \) -delete
+fi
+
+test -f "$PKG_ROOT/bin/zxy-panel-api-linux-amd64"
+test -f "$PKG_ROOT/bin/zxy-agent-linux-amd64"
 test -f "$PKG_ROOT/frontend/dist/index.html"
 cat > "$PKG_ROOT/PACKAGE-MANIFEST.json" <<JSON_PACKAGE
 {
   "version": "${VERSION}",
   "codename": "${CODENAME}",
-  "latest": "${VERSION}-${CODENAME}-agent-xray",
+  "latest": "${SOURCE_VERSION}",
   "package": "${PKG_NAME}",
-  "note": "Release SHA256 is published in main/version.json and SHA256SUMS. This package manifest intentionally does not include a self-referential archive hash."
+  "note": "Release SHA256 is published outside the archive. This package intentionally omits version.json to avoid a self-referential hash."
 }
 JSON_PACKAGE
 
-python3 - "$TMP_DIR" "$(basename "$PKG_ROOT")" "$PKG_PATH" <<'PYZIP'
-import os, sys, zipfile
+"$PYTHON_BIN" - "$TMP_DIR" "$(basename "$PKG_ROOT")" "$PKG_PATH" <<'PYZIP'
+import os
+import stat
+import sys
+import zipfile
+
 base, root_name, out = sys.argv[1], sys.argv[2], sys.argv[3]
 root = os.path.join(base, root_name)
 with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
@@ -74,13 +118,18 @@ with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9
         for filename in sorted(filenames):
             full = os.path.join(dirpath, filename)
             rel = os.path.relpath(full, base).replace(os.sep, '/')
-            zf.write(full, rel)
+            info = zipfile.ZipInfo.from_file(full, rel)
+            if rel.endswith(('.sh', '/zxy-panel', '/zxy-netopt')) or '/bin/' in rel:
+                info.external_attr = (stat.S_IFREG | 0o755) << 16
+            with open(full, 'rb') as source:
+                zf.writestr(info, source.read(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 PYZIP
 
 SHA256="$(sha256sum "$PKG_PATH" | awk '{print $1}')"
+printf '%s  %s\n' "$SHA256" "$PKG_NAME" > "$OUT_DIR/SHA256SUMS"
 cat > "$OUT_DIR/version.fast.json" <<JSON
 {
-  "latest": "${VERSION}-${CODENAME}-agent-xray",
+  "latest": "${SOURCE_VERSION}",
   "version": "${VERSION}",
   "codename": "${CODENAME}",
   "package": "${PKG_NAME}",
@@ -89,14 +138,14 @@ cat > "$OUT_DIR/version.fast.json" <<JSON
   "min_supported_version": "0.7.5",
   "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "changelog": [
-    "统一 README、CHANGELOG、构建脚本、前端文案、后端版本、Agent 版本和安装脚本版本",
-    "Release 包不再内置带 SHA256 的 version.json，避免发布包内部 manifest 与外部 release manifest hash 不一致",
-    "Fresh install 没有备份、尚未创建客户绑定时，doctor 改为 INFO 提示，不再误报 warning",
-    "客户分享弹窗补充 Clash Verge / Mihomo 使用提示：订阅源端口不是节点端口，导入后需选择节点，内核通信错误需重启内核或客户端",
-    "Clash YAML 顶部增加客户端使用说明，减少导入成功但当前节点为空的误判",
-    "保留 V0.7.7.3 Clash/Mihomo 订阅绑定修复和 V0.7.7.2 BindingCheck、Agent apply 校验、Doctor 深度检测"
-  ]}
+    "Synchronize source, frontend, backend, Agent, and installer version metadata.",
+    "Distinguish development and release version consistency checks.",
+    "Preserve existing BBR work and core network behavior."
+  ]
+}
 JSON
+node "$ROOT_DIR/scripts/check-version-consistency.mjs" --mode release \
+  --manifest "$OUT_DIR/version.fast.json" --package "$PKG_PATH"
 
 echo "[5/5] Done"
 echo "Package: $PKG_PATH"

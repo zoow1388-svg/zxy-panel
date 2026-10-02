@@ -52,26 +52,17 @@ func (s *Store) loadOrInit() error {
 		return err
 	}
 	if len(raw) == 0 {
-		s.Data = newData()
-		if err := s.seedDefaultAdmin(); err != nil {
-			return err
-		}
-		if err := s.seedLocalServer(); err != nil {
-			return err
-		}
-		return s.SaveLocked()
+		return errors.New("existing panel data file is empty; restore a backup before starting")
 	}
-	if err := json.Unmarshal(raw, &s.Data); err != nil {
+	var data *model.PanelData
+	if err := json.Unmarshal(raw, &data); err != nil {
 		return err
 	}
+	if data == nil {
+		return errors.New("existing panel data must be a JSON object; restore a backup before starting")
+	}
+	s.Data = *data
 	normalize(&s.Data)
-	changed, err := s.ensureSingleModeLocalServer()
-	if err != nil {
-		return err
-	}
-	if changed {
-		return s.SaveLocked()
-	}
 	return nil
 }
 
@@ -211,131 +202,6 @@ func (s *Store) seedLocalServer() error {
 	s.Data.Servers[serverID] = model.Server{
 		ID: serverID, Name: name, IP: ip, Host: host, Region: region, Provider: provider,
 		Status: "offline", AgentToken: NewToken(), CreatedAt: now, UpdatedAt: now,
-	}
-	return nil
-}
-
-func (s *Store) ensureSingleModeLocalServer() (bool, error) {
-	if len(s.Data.Servers) == 0 {
-		return true, s.seedLocalServer()
-	}
-	localIP := getenv("ZXY_LOCAL_SERVER_IP", "127.0.0.1")
-	localHost := getenv("ZXY_LOCAL_SERVER_HOST", localIP)
-	localName := getenv("ZXY_LOCAL_SERVER_NAME", "本机服务器")
-	localRegion := getenv("ZXY_LOCAL_SERVER_REGION", "Local")
-	localProvider := getenv("ZXY_LOCAL_SERVER_PROVIDER", "Self-hosted")
-
-	// V0.5.8：从 V0.4.x / V0.5.0 升级到单机模式时，旧数据里可能已经存在同 IP 服务器。
-	// 这里自动选择一台作为“本机服务器”，把同 IP/Host 的重复服务器合并，避免后台出现多个本机、Agent 版本报警、入站绑定旧 server_id。
-	candidates := []model.Server{}
-	for _, srv := range s.Data.Servers {
-		if sameServerEndpoint(srv, localIP, localHost) || len(s.Data.Servers) == 1 {
-			candidates = append(candidates, srv)
-		}
-	}
-	if len(candidates) == 0 {
-		return true, s.seedLocalServer()
-	}
-	keep := pickLocalServer(candidates)
-	changed := false
-	if keep.Name == "" || keep.Name == keep.IP || keep.Name == keep.Host {
-		keep.Name = localName
-		changed = true
-	}
-	// V0.5.8：如果升级后本机服务器还显示 127.0.0.1/localhost，而安装脚本已经识别到公网 IP，
-	// 自动把展示 IP/Host 修正为公网入口，避免后台看起来像只能本机访问。
-	if keep.IP == "" || shouldReplaceLocalEndpoint(keep.IP, localIP) {
-		keep.IP = localIP
-		changed = true
-	}
-	if keep.Host == "" || shouldReplaceLocalEndpoint(keep.Host, localHost) {
-		keep.Host = localHost
-		changed = true
-	}
-	if keep.Region == "" {
-		keep.Region = localRegion
-		changed = true
-	}
-	if keep.Provider == "" {
-		keep.Provider = localProvider
-		changed = true
-	}
-	if keep.AgentToken == "" {
-		keep.AgentToken = NewToken()
-		changed = true
-	}
-	if keep.UpdatedAt.IsZero() {
-		keep.UpdatedAt = time.Now()
-		changed = true
-	}
-	s.Data.Servers[keep.ID] = keep
-
-	for _, srv := range candidates {
-		if srv.ID == keep.ID {
-			continue
-		}
-		for id, n := range s.Data.Nodes {
-			if n.ServerID == srv.ID {
-				n.ServerID = keep.ID
-				n.UpdatedAt = time.Now()
-				s.Data.Nodes[id] = n
-			}
-		}
-		delete(s.Data.Servers, srv.ID)
-		changed = true
-	}
-	return changed, nil
-}
-
-func sameServerEndpoint(srv model.Server, localIP, localHost string) bool {
-	return (localIP != "" && (srv.IP == localIP || srv.Host == localIP)) || (localHost != "" && (srv.IP == localHost || srv.Host == localHost)) ||
-		(isLoopbackEndpoint(srv.IP) && !isLoopbackEndpoint(localIP)) || (isLoopbackEndpoint(srv.Host) && !isLoopbackEndpoint(localHost))
-}
-
-func isLoopbackEndpoint(v string) bool {
-	switch v {
-	case "127.0.0.1", "localhost", "::1", "0.0.0.0":
-		return true
-	default:
-		return false
-	}
-}
-
-func shouldReplaceLocalEndpoint(current, target string) bool {
-	return target != "" && !isLoopbackEndpoint(target) && isLoopbackEndpoint(current)
-}
-
-func pickLocalServer(list []model.Server) model.Server {
-	keep := list[0]
-	for _, srv := range list[1:] {
-		if srv.AgentVersion == "0.7.7.6-bbr-optimization-agent-xray" && keep.AgentVersion != "0.7.7.6-bbr-optimization-agent-xray" {
-			keep = srv
-			continue
-		}
-		if srv.Status == "online" && keep.Status != "online" {
-			keep = srv
-			continue
-		}
-		if srv.LastSyncAt.After(keep.LastSyncAt) {
-			keep = srv
-			continue
-		}
-		if keep.LastSyncAt.IsZero() && srv.CreatedAt.After(keep.CreatedAt) {
-			keep = srv
-		}
-	}
-	return keep
-}
-
-// EnsureSingleModeLocalServerLocked makes sure the single-node local server exists.
-// Caller must hold s.Mu.Lock().
-func (s *Store) EnsureSingleModeLocalServerLocked() error {
-	changed, err := s.ensureSingleModeLocalServer()
-	if err != nil {
-		return err
-	}
-	if changed {
-		return s.SaveLocked()
 	}
 	return nil
 }

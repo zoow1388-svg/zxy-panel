@@ -15,9 +15,8 @@ import (
 func (r *Router) nodes(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodGet:
-		r.store.Mu.Lock()
-		defer r.store.Mu.Unlock()
-		_ = r.store.EnsureSingleModeLocalServerLocked()
+		r.store.Mu.RLock()
+		defer r.store.Mu.RUnlock()
 		list := make([]model.Node, 0, len(r.store.Data.Nodes))
 		for _, item := range r.store.Data.Nodes {
 			list = append(list, item)
@@ -175,7 +174,6 @@ func (r *Router) normalizeNodeLocked(n *model.Node, currentID string) error {
 	n.Remark = strings.TrimSpace(n.Remark)
 
 	if n.ServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
 		n.ServerID = r.defaultServerIDLocked()
 	}
 	if n.ServerID == "" {

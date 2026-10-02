@@ -33,9 +33,8 @@ type bbrServerStatus struct {
 func (r *Router) bbrStatus(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodGet:
-		r.store.Mu.Lock()
-		defer r.store.Mu.Unlock()
-		_ = r.store.EnsureSingleModeLocalServerLocked()
+		r.store.Mu.RLock()
+		defer r.store.Mu.RUnlock()
 
 		items := make([]bbrServerStatus, 0, len(r.store.Data.Servers))
 		for _, server := range r.store.Data.Servers {

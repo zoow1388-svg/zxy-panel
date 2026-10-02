@@ -13,9 +13,8 @@ import (
 func (r *Router) servers(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodGet:
-		r.store.Mu.Lock()
-		defer r.store.Mu.Unlock()
-		_ = r.store.EnsureSingleModeLocalServerLocked()
+		r.store.Mu.RLock()
+		defer r.store.Mu.RUnlock()
 		list := make([]model.Server, 0, len(r.store.Data.Servers))
 		for _, item := range r.store.Data.Servers {
 			list = append(list, item)

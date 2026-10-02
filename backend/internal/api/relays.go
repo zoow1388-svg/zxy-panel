@@ -138,7 +138,6 @@ func (r *Router) normalizeRelayLocked(relay *model.RelayRoute, currentID string)
 		return fmt.Errorf("中转类型只支持 TCP 透传中转或 SOCKS5 路由中转")
 	}
 	if relay.RelayServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
 		relay.RelayServerID = r.defaultServerIDLocked()
 	}
 	srv, ok := r.store.Data.Servers[relay.RelayServerID]

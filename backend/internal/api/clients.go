@@ -227,7 +227,6 @@ func (r *Router) createClientWithSocks5Relay(w http.ResponseWriter, req *http.Re
 		return
 	}
 	if body.RelayServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
 		body.RelayServerID = r.defaultServerIDLocked()
 	}
 	srv, ok := r.store.Data.Servers[body.RelayServerID]

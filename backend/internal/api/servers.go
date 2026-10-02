@@ -2,6 +2,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -94,9 +95,14 @@ func (r *Router) serverByID(w http.ResponseWriter, req *http.Request) {
 			})
 			return
 		}
-		delete(r.store.Data.Servers, id)
-		r.store.AddLog(currentClaims(req).Username, "server.delete", clientIP(req), id)
-		_ = r.store.SaveLocked()
+		if err := r.store.DeleteServerLocked(id, currentClaims(req).Username, clientIP(req)); err != nil {
+			log.Printf("failed to persist server deletion: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "Failed to save server deletion; the server and its references have not been changed.",
+				"code":  "server_delete_save_failed",
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		methodNotAllowed(w)

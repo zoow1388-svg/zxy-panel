@@ -20,11 +20,11 @@ func (r *Router) agentHeartbeat(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if !r.validateAgentToken(w, req, body.ServerID) {
-		return
-	}
 	r.store.Mu.Lock()
 	defer r.store.Mu.Unlock()
+	if !r.validateAgentTokenLocked(w, req, body.ServerID) {
+		return
+	}
 	s := r.store.Data.Servers[body.ServerID]
 	s.Status = "online"
 	s.AgentVersion = body.AgentVersion
@@ -61,16 +61,12 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if !r.validateAgentToken(w, req, body.ServerID) {
-		return
-	}
 	r.store.Mu.Lock()
 	defer r.store.Mu.Unlock()
-	server, ok := r.store.Data.Servers[body.ServerID]
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not registered"})
+	if !r.validateAgentTokenLocked(w, req, body.ServerID) {
 		return
 	}
+	server := r.store.Data.Servers[body.ServerID]
 	nodes := make([]model.Node, 0)
 	for _, n := range r.store.Data.Nodes {
 		if n.ServerID == body.ServerID && n.Enabled {
@@ -127,7 +123,8 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (r *Router) validateAgentToken(w http.ResponseWriter, req *http.Request, serverID string) bool {
+// Caller must hold the store lock through authentication and any mutation.
+func (r *Router) validateAgentTokenLocked(w http.ResponseWriter, req *http.Request, serverID string) bool {
 	if serverID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing server_id"})
 		return false
@@ -137,9 +134,7 @@ func (r *Router) validateAgentToken(w http.ResponseWriter, req *http.Request, se
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing agent token"})
 		return false
 	}
-	r.store.Mu.RLock()
 	s, ok := r.store.Data.Servers[serverID]
-	r.store.Mu.RUnlock()
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not registered"})
 		return false

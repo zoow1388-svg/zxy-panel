@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { copyText } from '../clipboard'
 const servers = ref<any[]>([])
 const form = ref<any>({ name:'', ip:'', host:'', region:'US', provider:'' })
@@ -25,7 +25,20 @@ async function createServer() {
     await load()
   } catch(e:any){ error.value=e.message }
 }
-async function remove(id:string) { if(!confirm('确认删除这台服务器？')) return; await api(`/api/servers/${id}`,{method:'DELETE'}); await load() }
+async function remove(id:string) {
+  if(!confirm('确认删除这台服务器？')) return
+  error.value=''; message.value=''
+  try {
+    await api(`/api/servers/${id}`,{method:'DELETE'})
+  } catch(e) {
+    if(e instanceof ApiError && e.status===409) {
+      error.value=e.message
+      return
+    }
+    throw e
+  }
+  await load()
+}
 function fmtBytes(v:number) { if(!v) return '0 B'; const units=['B','KB','MB','GB','TB']; let n=v, i=0; while(n>=1024&&i<units.length-1){n/=1024;i++}; return `${n.toFixed(i?2:0)} ${units[i]}` }
 function installCommand(s:any) {
   const base = publicPanelBase()

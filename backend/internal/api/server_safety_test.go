@@ -133,7 +133,10 @@ func TestReadEndpointsDoNotMergeMigrateOrWrite(t *testing.T) {
 							for _, id := range []string{"srv_a", "srv_b"} {
 								request := httptest.NewRequest(http.MethodPost, "/api/agent/heartbeat", nil)
 								request.Header.Set("X-Agent-Token", "synthetic-token-"+id)
-								if !router.validateAgentToken(httptest.NewRecorder(), request, id) {
+								router.store.Mu.RLock()
+								valid := router.validateAgentTokenLocked(httptest.NewRecorder(), request, id)
+								router.store.Mu.RUnlock()
+								if !valid {
 									t.Errorf("GET %s invalidated original Agent identity %s", path, id)
 								}
 							}

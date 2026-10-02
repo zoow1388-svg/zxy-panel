@@ -8,6 +8,12 @@ export function getToken() { return localStorage.getItem('zxy_token') || '' }
 export function setToken(token: string) { localStorage.setItem('zxy_token', token) }
 export function clearToken() { localStorage.removeItem('zxy_token') }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
 function normalizeError(text: string) {
   try {
     const data = JSON.parse(text)
@@ -32,7 +38,7 @@ export async function api(path: string, options: RequestInit = {}) {
         location.href = `${BASE_PATH}login`
       }
     }
-    throw new Error(msg)
+    throw new ApiError(msg, res.status)
   }
   const type = res.headers.get('content-type') || ''
   if (type.includes('application/json')) return res.json()

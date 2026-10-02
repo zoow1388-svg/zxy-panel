@@ -80,15 +80,19 @@ func (r *Router) serverByID(w http.ResponseWriter, req *http.Request) {
 		_ = r.store.SaveLocked()
 		writeJSON(w, http.StatusOK, body)
 	case http.MethodDelete:
-		if len(r.store.Data.Servers) <= 1 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "单机模式至少需要保留一台本机服务器，不能删除最后一台服务器"})
-			return
-		}
-		for _, n := range r.store.Data.Nodes {
-			if n.ServerID == id {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "这台服务器下还有入站，请先迁移或删除入站后再删除服务器"})
-				return
+		if conflicts := r.serverDeleteConflictsLocked(id); len(conflicts) > 0 {
+			messages := make([]string, 0, len(conflicts))
+			for i, conflict := range conflicts {
+				if i == 0 || conflict.Kind != conflicts[i-1].Kind {
+					messages = append(messages, conflict.Message)
+				}
 			}
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "Server deletion blocked: " + strings.Join(messages, " "),
+				"code":      "server_delete_conflict",
+				"conflicts": conflicts,
+			})
+			return
 		}
 		delete(r.store.Data.Servers, id)
 		r.store.AddLog(currentClaims(req).Username, "server.delete", clientIP(req), id)

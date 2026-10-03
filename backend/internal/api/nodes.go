@@ -42,9 +42,10 @@ func (r *Router) nodes(w http.ResponseWriter, req *http.Request) {
 		body.Enabled = true
 		body.CreatedAt = now
 		body.UpdatedAt = now
-		r.store.Data.Nodes[body.ID] = body
-		r.store.AddLog(currentClaims(req).Username, "node.create", clientIP(req), body.Name)
-		_ = r.store.SaveLocked()
+		if err := r.store.CreateNodeLocked(body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeNodeMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusCreated, body)
 	default:
 		methodNotAllowed(w)

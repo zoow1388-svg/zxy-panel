@@ -33,13 +33,13 @@ func (r *Router) nodes(w http.ResponseWriter, req *http.Request) {
 		}
 		r.store.Mu.Lock()
 		defer r.store.Mu.Unlock()
+		body.Enabled = true
 		if err := r.normalizeNodeLocked(&body, ""); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		now := time.Now()
 		body.ID = store.NewID("node")
-		body.Enabled = true
 		body.CreatedAt = now
 		body.UpdatedAt = now
 		if err := r.store.CreateNodeLocked(body, currentClaims(req).Username, clientIP(req)); err != nil {

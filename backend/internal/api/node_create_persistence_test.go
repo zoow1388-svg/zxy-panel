@@ -147,6 +147,8 @@ func TestNodeCreateAPIInvalidParametersLeaveStateUnchanged(t *testing.T) {
 		{"protocol", `{"name":"Synthetic new","port":32101,"protocol":"unsupported"}`},
 		{"transport", `{"name":"Synthetic new","port":32101,"transport":"unsupported"}`},
 		{"security", `{"name":"Synthetic new","port":32101,"security":"unsupported"}`},
+		{"omitted_duplicate_port", `{"name":"Synthetic new","server_id":"srv_a","port":32001}`},
+		{"false_duplicate_port", `{"name":"Synthetic new","server_id":"srv_a","port":32001,"enabled":false}`},
 		{"enabled_duplicate_port", `{"name":"Synthetic new","server_id":"srv_a","port":32001,"enabled":true}`},
 	}
 	for _, tc := range cases {
@@ -169,6 +171,115 @@ func TestNodeCreateAPIInvalidParametersLeaveStateUnchanged(t *testing.T) {
 				t.Fatal("invalid create returned success data")
 			}
 			b2APIUnchanged(t, s, before, s.Path, raw, modified)
+		})
+	}
+}
+
+func TestNodeCreateAPIPortScopeKeepsAllowedBehavior(t *testing.T) {
+	for _, flag := range []string{"", `,"enabled":false`, `,"enabled":true`} {
+		for _, scenario := range []string{"different_server", "different_port", "disabled_existing"} {
+			t.Run(scenario+"/"+flag, func(t *testing.T) {
+				s := nodeCreateAPIFixture(t)
+				server, port := "srv_a", 32001
+				switch scenario {
+				case "different_server":
+					server = "srv_b"
+				case "different_port":
+					port = 32101
+				case "disabled_existing":
+					node := s.Data.Nodes["node"]
+					node.Enabled = false
+					s.Data.Nodes[node.ID] = node
+				}
+				persistDeletionFixture(t, s)
+				before := b2APISnapshot(s.Data)
+				payload, err := json.Marshal(map[string]any{"name": "Synthetic port scope", "server_id": server, "port": port})
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := strings.TrimSuffix(string(payload), "}") + flag + "}"
+				response := b2APIRequest(t, s, http.MethodPost, "/api/nodes", body)
+				if response.Code != http.StatusCreated {
+					t.Fatalf("allowed port scope status = %d", response.Code)
+				}
+				var created model.Node
+				if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+					t.Fatal(err)
+				}
+				if !created.Enabled || created.ServerID != server || created.Port != port || len(s.Data.Nodes) != len(before.Nodes)+1 || len(s.Data.OperationLogs) != len(before.OperationLogs)+1 {
+					t.Fatal("allowed port scope changed creation behavior")
+				}
+				after := b2APISnapshot(s.Data)
+				delete(after.Nodes, created.ID)
+				for id, entry := range after.OperationLogs {
+					if _, exists := before.OperationLogs[id]; !exists {
+						if entry.Action != "node.create" || entry.Detail != created.Name || entry.Actor != "synthetic-admin" {
+							t.Fatal("unexpected creation log")
+						}
+						delete(after.OperationLogs, id)
+					}
+				}
+				a, b := b2CompareTimes(t, reflect.ValueOf(before), reflect.ValueOf(after))
+				if !reflect.DeepEqual(a.Interface(), b.Interface()) {
+					t.Fatal("allowed creation changed unrelated memory, bindings, BBR or logs")
+				}
+				assertNodeFileMatchesMemory(t, s)
+			})
+		}
+	}
+}
+
+func TestNodeCreateAPIConcurrentDuplicatePortCommitsOnlyOnce(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		name := "first_omitted"
+		if reverse {
+			name = "first_false"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := nodeCreateAPIFixture(t)
+			before := b2APISnapshot(s.Data)
+			payloads := []string{
+				`{"name":"Synthetic omitted","server_id":"srv_a","port":32101}`,
+				`{"name":"Synthetic false","server_id":"srv_a","port":32101,"enabled":false}`,
+			}
+			if reverse {
+				payloads[0], payloads[1] = payloads[1], payloads[0]
+			}
+			firstReq := persistenceRequest(t, http.MethodPost, "/api/nodes", payloads[0], false)
+			secondReq := persistenceRequest(t, http.MethodPost, "/api/nodes", payloads[1], false)
+			first := &b2LockedResponse{ResponseRecorder: httptest.NewRecorder(), reached: make(chan struct{}), release: make(chan struct{})}
+			second := httptest.NewRecorder()
+			firstDone, secondDone, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			router := NewRouter(s)
+			go func() {
+				router.ServeHTTP(first, firstReq)
+				close(firstDone)
+			}()
+			<-first.reached
+			// The first handler still owns the write lock after committing its candidate.
+			committed := b2APISnapshot(s.Data)
+			raw, readErr := os.ReadFile(s.Path)
+			info, statErr := os.Stat(s.Path)
+			go func() {
+				close(secondStarted)
+				router.ServeHTTP(second, secondReq)
+				close(secondDone)
+			}()
+			<-secondStarted
+			close(first.release)
+			<-firstDone
+			<-secondDone
+			if readErr != nil || statErr != nil {
+				t.Fatalf("committed baseline read/stat failed: %v / %v", readErr, statErr)
+			}
+			if first.Code != http.StatusCreated || second.Code != http.StatusBadRequest {
+				t.Fatalf("concurrent creation statuses = %d / %d", first.Code, second.Code)
+			}
+			if len(committed.Nodes) != len(before.Nodes)+1 || len(committed.OperationLogs) != len(before.OperationLogs)+1 {
+				t.Fatal("concurrent creation must commit exactly one node and business log")
+			}
+			b2APIUnchanged(t, s, committed, s.Path, raw, info.ModTime())
+			assertNodeFileMatchesMemory(t, s)
 		})
 	}
 }

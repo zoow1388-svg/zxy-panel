@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, ApiError, formatMutationError } from '../api'
 import { copyText } from '../clipboard'
 import { buildClientShare, clientsForNode, isQrShareFormat, qrImageUrl, shareFormatLabel, shareFormatOptions, type ShareFormat } from '../share'
 
@@ -75,6 +75,13 @@ const modeTip = computed(() => {
 function normalizeApiError(e:any) {
   try { const data = JSON.parse(e.message); return data.error || e.message } catch { return e?.message || '操作失败' }
 }
+function showMutationError(e:unknown) {
+  error.value = formatMutationError(e)
+  if (showEditor.value && !(e instanceof ApiError && e.status === 401)) alert(error.value)
+}
+async function refreshAfterMutation() {
+  if (!await load()) error.value = `写操作已完成，但页面刷新失败，请手动刷新核对。${error.value}`
+}
 function fillFromServer() {
   const s = selectedServer.value
   if (!s) return
@@ -108,7 +115,8 @@ async function load() {
     }
     if (mode.value === 'recommended') await ensureRealityKeys(false)
     updateShareLink()
-  } catch(e:any) { error.value = normalizeApiError(e) }
+    return true
+  } catch(e:any) { error.value = normalizeApiError(e); return false }
 }
 
 async function ensureRealityKeys(force = false) {
@@ -201,20 +209,25 @@ async function saveNode() {
   if (err) { error.value = err; return }
   saving.value = true
   try {
-    if (form.value.protocol !== 'socks' && form.value.security === 'reality') await ensureRealityKeys(false)
-    const payload = { ...form.value, port: Number(form.value.port) }
-    if (payload.transport === 'tcp') payload.path = ''
-    if (editingId.value) {
-      await api(`/api/nodes/${editingId.value}`, { method:'PUT', body:JSON.stringify(payload) })
-      message.value = form.value.protocol === 'socks' ? 'SOCKS5 入站已保存。Agent 同步后会下发到对应落地服务器。' : '入站已保存。Reality/订阅配置会在 Agent 下一次同步时更新。'
-    } else {
-      await api('/api/nodes', { method:'POST', body:JSON.stringify(payload) })
-      message.value = form.value.protocol === 'socks' ? 'SOCKS5 落地入站已新增。请放行端口，并建议只允许中转服务器 IP 访问。' : '入站已新增。推荐模式会自动生成 Reality 客户端链接参数。'
+    try {
+      if (form.value.protocol !== 'socks' && form.value.security === 'reality') await ensureRealityKeys(false)
+      const payload = { ...form.value, port: Number(form.value.port) }
+      if (payload.transport === 'tcp') payload.path = ''
+      if (editingId.value) {
+        await api(`/api/nodes/${editingId.value}`, { method:'PUT', body:JSON.stringify(payload) })
+        message.value = form.value.protocol === 'socks' ? 'SOCKS5 入站已保存。Agent 同步后会下发到对应落地服务器。' : '入站已保存。Reality/订阅配置会在 Agent 下一次同步时更新。'
+      } else {
+        await api('/api/nodes', { method:'POST', body:JSON.stringify(payload) })
+        message.value = form.value.protocol === 'socks' ? 'SOCKS5 落地入站已新增。请放行端口，并建议只允许中转服务器 IP 访问。' : '入站已新增。推荐模式会自动生成 Reality 客户端链接参数。'
+      }
+    } catch(e:unknown) {
+      showMutationError(e)
+      return
     }
     resetForm()
-    await load()
+    await refreshAfterMutation()
     showEditor.value = false
-  } catch(e:any) { error.value = normalizeApiError(e) } finally { saving.value = false }
+  } finally { saving.value = false }
 }
 function editNode(n:any) {
   showEditor.value = true
@@ -246,15 +259,15 @@ function editNode(n:any) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 async function remove(id:string) {
-  if(!confirm('确认删除这个入站？删除后，客户订阅里也会移除这个入站。')) return
+  if(!confirm('确认删除这个入站？如果仍被客户或中转线路引用，系统会拒绝删除，不会自动解除绑定。')) return
   error.value = ''; message.value = ''
   try {
     await api(`/api/nodes/${id}`,{method:'DELETE'})
-    if (editingId.value === id) resetForm()
-    if (shareNodeData.value?.id === id) closeShare()
-    message.value = '入站已删除。'
-    await load()
-  } catch(e:any) { error.value = normalizeApiError(e) }
+  } catch(e:unknown) { showMutationError(e); return }
+  if (editingId.value === id) resetForm()
+  if (shareNodeData.value?.id === id) closeShare()
+  message.value = '入站已删除。'
+  await refreshAfterMutation()
 }
 async function preview(id:string) {
   error.value = ''; message.value = ''

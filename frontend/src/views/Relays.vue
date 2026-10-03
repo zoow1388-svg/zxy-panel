@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, ApiError, formatMutationError } from '../api'
 import { copyText } from '../clipboard'
 
 const relays = ref<any[]>([])
@@ -45,6 +45,14 @@ function defaultForm() {
   }
 }
 const form = ref<any>(defaultForm())
+
+function showMutationError(e:unknown) {
+  error.value = formatMutationError(e)
+  if (showRelayEditor.value && !(e instanceof ApiError && e.status === 401)) alert(error.value)
+}
+async function refreshAfterMutation() {
+  if (!await load()) error.value = `写操作已完成，但页面刷新失败，请手动刷新核对。${error.value}`
+}
 
 const vlessRealityNodes = computed(() => nodes.value.filter((n:any) => n.enabled !== false && String(n.protocol).toLowerCase() === 'vless' && String(n.security).toLowerCase() === 'reality'))
 const socksNodes = computed(() => nodes.value.filter((n:any) => n.enabled !== false && String(n.protocol).toLowerCase() === 'socks'))
@@ -121,7 +129,8 @@ async function load() {
     ensureLandingDefault()
     if (!selectedRelayId.value && relays.value[0]) selectedRelayId.value = relays.value[0].id
     if (!selectedClientId.value && clients.value[0]) selectedClientId.value = clients.value[0].id
-  } catch(e:any) { error.value = e.message || '加载失败' }
+    return true
+  } catch(e:any) { error.value = e.message || '加载失败'; return false }
 }
 
 function loadSavedOutlets() {
@@ -229,25 +238,28 @@ async function createRelay() {
   try {
     const payload = { ...form.value, relay_port: Number(form.value.relay_port), manual_socks_port: Number(form.value.manual_socks_port || 0), relay_network: form.value.route_mode === 'socks5_route' ? 'tcp' : (form.value.relay_network || 'tcp') }
     await api('/api/relays', { method:'POST', body: JSON.stringify(payload) })
-    message.value = form.value.route_mode === 'socks5_route' ? 'SOCKS5 路由中转已创建。本机 Agent 同步后，中转服务器会生成 VLESS Reality 入站、SOCKS5 出站和路由绑定。' : 'TCP 透传中转线路已创建。Agent 同步后，中转服务器会监听该端口并转发到落地 Reality 节点。'
-    const keepServer = form.value.relay_server_id
-    const keepHost = form.value.relay_host
-    form.value = defaultForm()
-    form.value.relay_server_id = keepServer
-    form.value.relay_host = keepHost
-    fillRelayHost()
-    ensureLandingDefault()
-    showRelayEditor.value = false
-    await load()
-  } catch(e:any) { error.value = e.message || '创建失败' }
+  } catch(e:unknown) { showMutationError(e); return }
+  message.value = form.value.route_mode === 'socks5_route' ? 'SOCKS5 路由中转已创建。本机 Agent 同步后，中转服务器会生成 VLESS Reality 入站、SOCKS5 出站和路由绑定。' : 'TCP 透传中转线路已创建。Agent 同步后，中转服务器会监听该端口并转发到落地 Reality 节点。'
+  const keepServer = form.value.relay_server_id
+  const keepHost = form.value.relay_host
+  form.value = defaultForm()
+  form.value.relay_server_id = keepServer
+  form.value.relay_host = keepHost
+  fillRelayHost()
+  ensureLandingDefault()
+  showRelayEditor.value = false
+  await refreshAfterMutation()
 }
 
 async function removeRelay(id:string) {
   if (!confirm('确认删除这条中转线路？')) return
-  await api(`/api/relays/${id}`, { method:'DELETE' })
+  error.value = ''; message.value = ''
+  try {
+    await api(`/api/relays/${id}`, { method:'DELETE' })
+  } catch(e:unknown) { showMutationError(e); return }
   message.value = '中转线路已删除。'
   if (selectedRelayId.value === id) selectedRelayId.value = ''
-  await load()
+  await refreshAfterMutation()
 }
 
 function buildRelayVlessLink() {

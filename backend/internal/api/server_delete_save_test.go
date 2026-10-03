@@ -25,9 +25,8 @@ func TestServerDeleteSaveFailureRestoresState(t *testing.T) {
 			before, modified := persistDeletionFixture(t, s)
 			originalPath := s.Path
 			if mode == "write_failure" {
-				if err := os.Mkdir(s.Path+".tmp", 0700); err != nil {
-					t.Fatal(err)
-				}
+				// Fail staging creation without depending on a shared .tmp filename.
+				s.Path = filepath.Join(filepath.Dir(s.Path), "missing-parent", "panel.json")
 			} else {
 				s.Path = filepath.Join(filepath.Dir(s.Path), "nonempty-target")
 				if err := os.Mkdir(s.Path, 0700); err != nil {

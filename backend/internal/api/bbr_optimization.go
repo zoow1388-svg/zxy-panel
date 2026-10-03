@@ -2,6 +2,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -87,6 +88,14 @@ func (r *Router) queueBBRAction(w http.ResponseWriter, req *http.Request, action
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not found"})
 		return
 	}
+	if server.ID != body.ServerID {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "server identity is inconsistent"})
+		return
+	}
+	if server.BBRPendingAction != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "a BBR action is already pending; no changes committed"})
+		return
+	}
 
 	pending := &model.AgentSystemAction{
 		ID:          store.NewID("bbr"),
@@ -96,9 +105,8 @@ func (r *Router) queueBBRAction(w http.ResponseWriter, req *http.Request, action
 	}
 	server.BBRPendingAction = pending
 	server.UpdatedAt = time.Now()
-	r.store.Data.Servers[server.ID] = server
-	r.store.AddLog(currentClaims(req).Username, "bbr."+action, clientIP(req), server.Name)
-	if err := r.store.SaveLocked(); err != nil {
+	if err := r.store.SaveServerLocked(body.ServerID, server, currentClaims(req).Username, "bbr."+action, clientIP(req), server.Name); err != nil {
+		log.Printf("failed to persist BBR action: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save BBR action"})
 		return
 	}

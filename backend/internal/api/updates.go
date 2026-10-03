@@ -180,10 +180,17 @@ func fetchUpdateManifest(ctx context.Context, url string) (updateManifest, error
 }
 
 func (r *Router) currentXrayVersionText() string {
+	r.store.Mu.RLock()
+	version := ""
 	for _, srv := range r.store.Data.Servers {
 		if strings.TrimSpace(srv.XrayVersion) != "" {
-			return strings.TrimSpace(srv.XrayVersion)
+			version = strings.TrimSpace(srv.XrayVersion)
+			break
 		}
+	}
+	r.store.Mu.RUnlock()
+	if version != "" {
+		return version
 	}
 	return currentXrayVersionText()
 }

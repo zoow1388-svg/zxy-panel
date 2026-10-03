@@ -2,6 +2,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -40,14 +41,18 @@ func (r *Router) agentHeartbeat(w http.ResponseWriter, req *http.Request) {
 		body.BBRStatus.CheckedAt = time.Now()
 		s.BBRStatus = *body.BBRStatus
 	}
+	logActor, logAction, logDetail := "", "", ""
 	if body.CompletedActionID != "" && s.BBRPendingAction != nil && s.BBRPendingAction.ID == body.CompletedActionID {
 		action := s.BBRPendingAction.Action
 		s.BBRPendingAction = nil
-		r.store.AddLog("agent:"+body.ServerID, "bbr."+action+".complete", req.RemoteAddr, body.CompletedActionResult)
+		logActor, logAction, logDetail = "agent:"+body.ServerID, "bbr."+action+".complete", body.CompletedActionResult
 	}
 	s.UpdatedAt = time.Now()
-	r.store.Data.Servers[s.ID] = s
-	_ = r.store.SaveLocked()
+	if err := r.store.SaveServerLocked(body.ServerID, s, logActor, logAction, req.RemoteAddr, logDetail); err != nil {
+		log.Printf("failed to persist agent heartbeat: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save agent heartbeat"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "next_interval_seconds": 30})
 }
 
@@ -109,8 +114,11 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 	server.LastSyncAt = time.Now()
 	server.LastSyncMessage = "agent sync requested"
 	server.UpdatedAt = time.Now()
-	r.store.Data.Servers[server.ID] = server
-	_ = r.store.SaveLocked()
+	if err := r.store.SaveServerLocked(body.ServerID, server, "", "", "", ""); err != nil {
+		log.Printf("failed to persist agent sync: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save agent sync"})
+		return
+	}
 	writeJSON(w, http.StatusOK, model.AgentSyncResponse{
 		OK:                  true,
 		ServerID:            body.ServerID,
@@ -141,6 +149,10 @@ func (r *Router) validateAgentTokenLocked(w http.ResponseWriter, req *http.Reque
 	}
 	if token != s.AgentToken {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid agent token"})
+		return false
+	}
+	if s.ID != serverID {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "server identity is inconsistent"})
 		return false
 	}
 	return true

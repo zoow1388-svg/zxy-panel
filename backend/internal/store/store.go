@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -164,16 +167,121 @@ func normalizeNetworkPolicy(p *model.NetworkPolicy) {
 }
 
 func (s *Store) SaveLocked() error {
-	normalize(&s.Data)
-	raw, err := json.MarshalIndent(s.Data, "", "  ")
+	return s.commitLocked(clonePanelData(s.Data))
+}
+
+// Caller holds Mu.Lock through validation and this commit.
+func (s *Store) SaveServerLocked(id string, server model.Server, actor, action, ip, detail string) error {
+	if id == "" || server.ID != id {
+		return errors.New("server identity mismatch")
+	}
+	if current, exists := s.Data.Servers[id]; exists && current.ID != id {
+		return errors.New("stored server identity mismatch")
+	}
+	next := clonePanelData(s.Data)
+	if next.Servers == nil {
+		next.Servers = make(map[string]model.Server)
+	}
+	next.Servers[id] = cloneServer(server)
+	if action != "" {
+		addLog(&next, actor, action, ip, detail)
+	}
+	return s.commitLocked(next)
+}
+
+func (s *Store) commitLocked(next model.PanelData) error {
+	normalize(&next)
+	raw, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.Path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+	if err := writePanelData(s.Path, raw, osPanelFiles{}); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.Path)
+	s.Data = next
+	return nil
+}
+
+func cloneServer(server model.Server) model.Server {
+	server.BBRStatus.AvailableCongestionControl = slices.Clone(server.BBRStatus.AvailableCongestionControl)
+	if server.BBRPendingAction != nil {
+		action := *server.BBRPendingAction
+		server.BBRPendingAction = &action
+	}
+	return server
+}
+
+func clonePanelData(data model.PanelData) model.PanelData {
+	data.Admins = maps.Clone(data.Admins)
+	data.Servers = maps.Clone(data.Servers)
+	for id, server := range data.Servers {
+		data.Servers[id] = cloneServer(server)
+	}
+	data.Nodes = maps.Clone(data.Nodes)
+	data.Clients = maps.Clone(data.Clients)
+	for id, client := range data.Clients {
+		client.NodeIDs = slices.Clone(client.NodeIDs)
+		client.RelayRouteIDs = slices.Clone(client.RelayRouteIDs)
+		data.Clients[id] = client
+	}
+	data.RelayRoutes = maps.Clone(data.RelayRoutes)
+	data.LandingExits = maps.Clone(data.LandingExits)
+	data.OperationLogs = maps.Clone(data.OperationLogs)
+	data.NetworkPolicy.DNSServers = slices.Clone(data.NetworkPolicy.DNSServers)
+	data.NetworkPolicyBackup.DNSServers = slices.Clone(data.NetworkPolicyBackup.DNSServers)
+	return data
+}
+
+type stagedPanelFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
+type panelFiles interface {
+	CreateTemp(string, string) (stagedPanelFile, error)
+	Rename(string, string) error
+}
+
+type osPanelFiles struct{}
+
+func (osPanelFiles) CreateTemp(dir, pattern string) (stagedPanelFile, error) {
+	return os.CreateTemp(dir, pattern)
+}
+
+func (osPanelFiles) Rename(from, to string) error { return os.Rename(from, to) }
+
+func closePanelFile(file stagedPanelFile, cause error) error {
+	if err := file.Close(); err != nil {
+		return errors.Join(cause, fmt.Errorf("close temporary panel data: %w", err))
+	}
+	return cause
+}
+
+func writePanelData(path string, raw []byte, files panelFiles) error {
+	file, err := files.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary panel data: %w", err)
+	}
+	// Failed temporary files are retained with restricted permissions as evidence.
+	written, err := file.Write(raw)
+	if err == nil && written != len(raw) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return closePanelFile(file, fmt.Errorf("write temporary panel data: %w", err))
+	}
+	if err := file.Sync(); err != nil {
+		return closePanelFile(file, fmt.Errorf("sync temporary panel data: %w", err))
+	}
+	if err := closePanelFile(file, nil); err != nil {
+		return err
+	}
+	if err := files.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace panel data: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) seedDefaultAdmin() error {
@@ -238,8 +346,15 @@ func (s *Store) UpdateAdminLogin(id, ip string) {
 }
 
 func (s *Store) AddLog(actor, action, ip, detail string) {
+	addLog(&s.Data, actor, action, ip, detail)
+}
+
+func addLog(data *model.PanelData, actor, action, ip, detail string) {
+	if data.OperationLogs == nil {
+		data.OperationLogs = make(map[string]model.OperationLog)
+	}
 	id := NewID("log")
-	s.Data.OperationLogs[id] = model.OperationLog{ID: id, Actor: actor, Action: action, IP: ip, Detail: detail, CreatedAt: time.Now()}
+	data.OperationLogs[id] = model.OperationLog{ID: id, Actor: actor, Action: action, IP: ip, Detail: detail, CreatedAt: time.Now()}
 }
 
 func NewID(prefix string) string {

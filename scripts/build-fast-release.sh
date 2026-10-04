@@ -51,7 +51,7 @@ fi
 chmod +x "$ROOT_DIR/bin/zxy-agent-linux-amd64"
 
 echo "[3/5] Building frontend dist"
-(cd "$ROOT_DIR/frontend" && npm ci --no-audit --no-fund --progress=false && VITE_BASE_PATH=/ npm run build)
+(cd "$ROOT_DIR/frontend" && npm ci --no-audit --no-fund --progress=false && MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}VITE_BASE_PATH" VITE_BASE_PATH=/ npm run build)
 
 echo "[4/5] Packaging fast release"
 TMP_DIR="$(mktemp -d)"
@@ -119,8 +119,11 @@ with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9
             full = os.path.join(dirpath, filename)
             rel = os.path.relpath(full, base).replace(os.sep, '/')
             info = zipfile.ZipInfo.from_file(full, rel)
+            info.create_system = 3
             if rel.endswith(('.sh', '/zxy-panel', '/zxy-netopt')) or '/bin/' in rel:
                 info.external_attr = (stat.S_IFREG | 0o755) << 16
+            else:
+                info.external_attr = (stat.S_IFREG | 0o644) << 16
             with open(full, 'rb') as source:
                 zf.writestr(info, source.read(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 PYZIP

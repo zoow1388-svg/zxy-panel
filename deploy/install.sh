@@ -54,6 +54,8 @@ PREVIOUS_MODE=""
 API_UNIT_FILE=/etc/systemd/system/zxy-panel-api.service
 AGENT_UNIT_FILE=/etc/systemd/system/zxy-agent.service
 AGENT_ENV_FILE="$CONFIG_DIR/agent.env"
+HOST_NGINX_FILE=/etc/nginx/conf.d/zxy-panel.conf
+HOST_NGINX_PREVIOUS_HASH=''
 OWNED_CONTAINER_IDS=()
 COMPOSE_PROJECT=""
 LOCAL_SERVER_NAME=""
@@ -772,10 +774,237 @@ EOF_INFO
   chmod 600 "$INFO_FILE"
 }
 
+nginx_file_fingerprint() {
+  python3 - "$1" <<'PY_NGINX_FINGERPRINT'
+import hashlib, json, stat, sys
+from pathlib import Path
+try:
+    p = Path(sys.argv[1])
+    if p.is_symlink(): raise ValueError()
+    if not p.exists():
+        print('missing')
+    else:
+        before = p.stat()
+        if not stat.S_ISREG(before.st_mode): raise ValueError()
+        data = p.read_bytes()
+        after = p.stat()
+        stable = ('st_ino', 'st_dev', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid')
+        if any(getattr(before, key) != getattr(after, key) for key in stable): raise ValueError()
+        print(json.dumps(dict(sha256=hashlib.sha256(data).hexdigest(), size=after.st_size,
+            mode=after.st_mode, uid=after.st_uid, gid=after.st_gid,
+            mtime_ns=after.st_mtime_ns, inode=after.st_ino, device=after.st_dev), sort_keys=True))
+except (OSError, ValueError):
+    raise SystemExit('ERROR: Nginx file could not be read consistently.')
+PY_NGINX_FINGERPRINT
+}
+
+preflight_host_nginx() {
+  [[ ! -L "$HOST_NGINX_FILE" ]] || { fail 'Nginx configuration must not be a symlink.'; return 1; }
+  if [[ ! -e "$HOST_NGINX_FILE" ]]; then HOST_NGINX_PREVIOUS_HASH=missing; return; fi
+  [[ -f "$HOST_NGINX_FILE" && -f "$INFO_FILE" && ! -L "$INFO_FILE" ]] || {
+    fail 'Existing Nginx configuration ownership cannot be confirmed.'; return 1;
+  }
+  local old_port old_base old_api old_web
+  old_port=$(panel_info_value PORT)
+  old_base=$(panel_info_value WEB_BASE_PATH)
+  valid_port "$old_port" && validate_config_value WEB_BASE_PATH "$old_base" || {
+    fail 'Existing Nginx installation metadata is invalid.'; return 1;
+  }
+  old_api=$(env_file_value API_PORT) || return
+  old_web=$(env_file_value WEB_PORT) || return
+  HOST_NGINX_PREVIOUS_HASH=$(python3 - "$HOST_NGINX_FILE" "$APP_DIR" "$old_port" "$old_base" "${old_api:-8088}" "${old_web:-5173}" <<'PY_NGINX_OWNER'
+import hashlib, json, shlex, sys
+from pathlib import Path
+from urllib.parse import urlsplit
+try:
+    p = Path(sys.argv[1])
+    before = p.stat()
+    source = p.read_bytes()
+    after = p.stat()
+    stable = ('st_ino', 'st_dev', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid')
+    if any(getattr(before, key) != getattr(after, key) for key in stable) or p.is_symlink(): raise ValueError()
+    app, port, base, api, web = sys.argv[2:]
+    locations = {'/', '/index.html', '/api/', '/sub/', '/s/', '/assets/', '/' + base + '/'}
+    locations.update('/' + base + '/' + segment + '/' for segment in ('api', 'sub', 's', 'assets'))
+    locations.update('^/' + base + '/' + segment + '/(.*)$' for segment in ('api', 'sub', 's', 'assets'))
+    safe = {'client_max_body_size', 'index', 'proxy_http_version', 'proxy_set_header', 'add_header'}
+    servers, listens, stack, blocks = 0, [], [], {}
+    current = None
+    for line in source.decode('utf-8').splitlines():
+        words = shlex.split(line.strip(), comments=True)
+        if not words: continue
+        if words == ['server', '{']:
+            servers += 1; stack.append('server'); current = ('server',); blocks[current] = {}; continue
+        if words == ['}']:
+            if not stack: raise ValueError()
+            stack.pop(); current = ('server',) if stack else None; continue
+        if words[0] == 'location' and words[-1:] == ['{']:
+            if stack != ['server'] or words[-2] not in locations: raise ValueError()
+            current = tuple(words[1:-1])
+            if current in blocks: raise ValueError()
+            blocks[current] = {}; stack.append('location'); continue
+        if not stack or not words[-1].endswith(';'): raise ValueError()
+        words[-1] = words[-1][:-1]
+        key, values = words[0], words[1:]
+        if key != 'proxy_set_header' and key != 'add_header' and key in blocks[current]: raise ValueError()
+        blocks[current][key] = values
+        if key == 'listen': listens.append(values)
+        elif key == 'server_name':
+            if values != ['_']: raise ValueError()
+        elif key == 'root':
+            if values not in ([app + '/frontend/dist'], [app + '/web']): raise ValueError()
+        elif key == 'proxy_pass':
+            if len(values) != 1: raise ValueError()
+            uri = urlsplit(values[0])
+            routes = {'', '/' + base + '/'}
+            routes.update('/' + segment + '/' + suffix for segment in ('api', 'sub', 's') for suffix in ('', '$1', '$1$is_args$args'))
+            if uri.scheme != 'http' or uri.hostname != '127.0.0.1' or str(uri.port) not in (api, web) or uri.path not in routes or uri.query or uri.fragment: raise ValueError()
+        elif key == 'return':
+            if values != ['302', '/' + base + '/']: raise ValueError()
+        elif key == 'try_files':
+            if not values or any(v not in ('$uri', '$uri/', '/index.html', '/assets/$1', '=404') for v in values): raise ValueError()
+        elif key not in safe: raise ValueError()
+    if stack or servers != 1 or listens != [[port]]: raise ValueError()
+    server = blocks[('server',)]
+    if server.get('server_name') != ['_'] or server.get('client_max_body_size') != ['20m']: raise ValueError()
+    if blocks.get(('=', '/'), {}).get('return') != ['302', '/' + base + '/']: raise ValueError()
+    if 'root' in server:
+        required = {('server',), ('=', '/'), ('=', '/index.html'), ('^~', '/assets/'), ('/',), ('/' + base + '/',), ('~', '^/' + base + '/assets/(.*)$')}
+        if server.get('index') != ['index.html']: raise ValueError()
+        if blocks.get(('=', '/index.html'), {}).get('try_files') != ['/index.html', '=404']: raise ValueError()
+        if blocks.get(('^~', '/assets/'), {}).get('try_files') != ['$uri', '=404']: raise ValueError()
+        if blocks.get(('~', '^/' + base + '/assets/(.*)$'), {}).get('try_files') != ['/assets/$1', '=404']: raise ValueError()
+        for path in ('/', '/' + base + '/'):
+            if blocks.get((path,), {}).get('try_files') != ['$uri', '$uri/', '/index.html']: raise ValueError()
+        for segment in ('api', 'sub', 's'):
+            root = ('^~', '/' + segment + '/')
+            if blocks.get(root, {}).get('proxy_pass') != ['http://127.0.0.1:' + api + '/' + segment + '/']: raise ValueError()
+            required.add(root)
+            literal = ('^~', '/' + base + '/' + segment + '/')
+            regex = ('~', '^/' + base + '/' + segment + '/(.*)$')
+            selected = literal if literal in blocks else regex
+            expected = 'http://127.0.0.1:' + api + '/' + segment + '/' + ('' if selected == literal else '$1')
+            if blocks.get(selected, {}).get('proxy_pass') not in ([expected], [expected + '$is_args$args'] if selected == regex else [expected]): raise ValueError()
+            required.add(selected)
+        if set(blocks) != required: raise ValueError()
+    else:
+        allowed = {('server',), ('=', '/'), ('/' + base + '/',)}
+        if blocks.get(('/' + base + '/',), {}).get('proxy_pass') != ['http://127.0.0.1:' + web + '/' + base + '/']: raise ValueError()
+        if ('/',) in blocks:
+            allowed.add(('/',))
+            if blocks[('/',)].get('proxy_pass') != ['http://127.0.0.1:' + web]: raise ValueError()
+        if set(blocks) != allowed: raise ValueError()
+    print(json.dumps(dict(sha256=hashlib.sha256(source).hexdigest(), size=after.st_size,
+        mode=after.st_mode, uid=after.st_uid, gid=after.st_gid,
+        mtime_ns=after.st_mtime_ns, inode=after.st_ino, device=after.st_dev), sort_keys=True))
+except (OSError, UnicodeError, ValueError, IndexError):
+    raise SystemExit('ERROR: existing Nginx file is outside the confirmed panel scope; it was not replaced.')
+PY_NGINX_OWNER
+  ) || return
+}
+
+publish_host_nginx() {
+  local candidate="$1" checkdir previous=missing active=false enabled status state checked published current
+  local enable_attempted=false start_attempted=false
+  [[ -n "$HOST_NGINX_PREVIOUS_HASH" && -f "$candidate" && ! -L "$candidate" ]] || {
+    fail 'Nginx publication requires completed ownership preflight.'; return 1;
+  }
+  previous=$(nginx_file_fingerprint "$HOST_NGINX_FILE") || return
+  [[ "$previous" == "$HOST_NGINX_PREVIOUS_HASH" ]] || { fail 'Nginx configuration changed after preflight.'; return 1; }
+  checkdir=$(mktemp -d "$(dirname "$HOST_NGINX_FILE")/.zxy-nginx-check-XXXXXX") || return
+  if [[ "$previous" != missing ]]; then
+    cp -p "$HOST_NGINX_FILE" "$checkdir/previous.conf" || { rm -rf "$checkdir"; return 1; }
+  fi
+  checked=$(nginx_file_fingerprint "$candidate") || { rm -rf "$checkdir"; return 1; }
+  if ! printf 'error_log stderr;\nevents {}\nhttp {\ninclude /etc/nginx/mime.types;\n' > "$checkdir/check.conf" ||
+     ! cat "$candidate" >> "$checkdir/check.conf" || ! printf '\n}\n' >> "$checkdir/check.conf"; then
+    rm -rf "$checkdir"; fail 'Nginx candidate could not be read; previous configuration retained.'; return 1
+  fi
+  if ! nginx -t -c "$checkdir/check.conf"; then
+    rm -rf "$checkdir"; fail 'Nginx candidate validation failed; previous configuration retained.'; return 1
+  fi
+  if systemctl is-active --quiet nginx; then active=true; fi
+  enabled=$(systemctl is-enabled nginx 2>/dev/null) || enabled="${enabled:-unknown}"
+  current=$(nginx_file_fingerprint "$candidate") || { rm -rf "$checkdir"; return 1; }
+  [[ "$current" == "$checked" ]] || { rm -rf "$checkdir"; fail 'Nginx candidate changed during validation.'; return 1; }
+  if [[ "$previous" != missing ]]; then
+    current=$(nginx_file_fingerprint "$checkdir/previous.conf") || { rm -rf "$checkdir"; return 1; }
+    if ! python3 - "$previous" "$current" <<'PY_NGINX_BACKUP'
+import json, sys
+original, backup = map(json.loads, sys.argv[1:])
+for value in (original, backup):
+    value.pop('inode'); value.pop('device')
+if original != backup: raise SystemExit(1)
+PY_NGINX_BACKUP
+    then rm -rf "$checkdir"; fail 'Nginx recovery copy does not match preflight.'; return 1; fi
+  fi
+  chmod 644 "$candidate" || { rm -rf "$checkdir"; return 1; }
+  current=$(nginx_file_fingerprint "$HOST_NGINX_FILE") || { rm -rf "$checkdir"; return 1; }
+  [[ "$current" == "$previous" ]] || { rm -rf "$checkdir"; fail 'Nginx configuration changed during validation.'; return 1; }
+  mv "$candidate" "$HOST_NGINX_FILE" || { rm -rf "$checkdir"; return 1; }
+  if ! published=$(nginx_file_fingerprint "$HOST_NGINX_FILE") || ! python3 - "$checked" "$published" <<'PY_NGINX_PUBLISHED'
+import json, sys
+if json.loads(sys.argv[1])['sha256'] != json.loads(sys.argv[2])['sha256']: raise SystemExit(1)
+PY_NGINX_PUBLISHED
+  then
+    state=$(systemctl is-active nginx 2>/dev/null) || state="${state:-unknown}"
+    printf 'ERROR: published Nginx file could not be confirmed; recovery directory=%s, actual service state=%s.\n' "$checkdir" "$state" >&2
+    return 2
+  fi
+  status=0
+  if ! nginx -t; then status=1
+  elif [[ "$active" == true ]]; then
+    systemctl reload nginx || status=1
+  elif [[ "$enabled" == enabled ]]; then
+    start_attempted=true
+    systemctl start nginx || status=1
+  elif [[ "$enabled" == disabled ]]; then
+    enable_attempted=true
+    if systemctl enable nginx; then
+      start_attempted=true
+      systemctl start nginx || status=1
+    else status=1
+    fi
+  else status=1
+  fi
+  if [[ "$status" == 0 ]] && ! systemctl is-active --quiet nginx; then status=1; fi
+  if [[ "$status" != 0 ]]; then
+    current=$(nginx_file_fingerprint "$HOST_NGINX_FILE") || current=unreadable
+    if [[ "$published" == unreadable || "$current" != "$published" ]]; then
+      status=2
+    elif [[ "$previous" == missing ]]; then
+      rm -f "$HOST_NGINX_FILE" || status=2
+    else
+      cp -p "$checkdir/previous.conf" "$checkdir/restore.conf" && mv "$checkdir/restore.conf" "$HOST_NGINX_FILE" || status=2
+    fi
+    if [[ "$status" == 2 ]]; then
+      state=$(systemctl is-active nginx 2>/dev/null) || state="${state:-unknown}"
+      printf 'ERROR: Nginx file rollback incomplete; recovery directory=%s, actual service state=%s.\n' "$checkdir" "$state" >&2
+      return 2
+    elif [[ "$active" == true ]]; then
+      nginx -t && systemctl reload nginx || status=2
+    else
+      if [[ "$start_attempted" == true ]]; then systemctl stop nginx || status=2; fi
+      if [[ "$enable_attempted" == true ]]; then systemctl disable nginx || status=2; fi
+    fi
+    state=$(systemctl is-active nginx 2>/dev/null) || state="${state:-unknown}"
+    printf 'ERROR: Nginx publication failed; rollback status=%s, actual service state=%s.\n' "$status" "$state" >&2
+    if [[ "$status" == 2 ]]; then
+      printf 'ERROR: Nginx service recovery incomplete; recovery directory=%s.\n' "$checkdir" >&2
+    else rm -rf "$checkdir"
+    fi
+    return "$status"
+  fi
+  rm -rf "$checkdir"
+  echo 'Nginx configuration validated and service active.'
+}
+
 write_host_nginx_docker() {
   step "Writing host Nginx reverse proxy"
-  mkdir -p /etc/nginx/conf.d
-  cat > /etc/nginx/conf.d/zxy-panel.conf <<EOF_NGINX
+  local candidate
+  mkdir -p "$(dirname "$HOST_NGINX_FILE")" || return
+  candidate=$(mktemp "$(dirname "$HOST_NGINX_FILE")/.zxy-panel-candidate-XXXXXX") || return
+  cat > "$candidate" <<EOF_NGINX || { rm -f "$candidate"; return 1; }
 server {
     listen ${PANEL_PORT};
     server_name _;
@@ -794,11 +1023,21 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
+
+    location / {
+        proxy_pass http://127.0.0.1:${WEB_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
 }
 EOF_NGINX
-  nginx -t
-  systemctl enable nginx >/dev/null 2>&1 || true
-  systemctl restart nginx
+  local status=0
+  publish_host_nginx "$candidate" || status=$?
+  rm -f "$candidate" || { fail 'Nginx temporary file cleanup failed.'; return 1; }
+  return "$status"
 }
 
 write_host_nginx_fast() {
@@ -807,13 +1046,15 @@ write_host_nginx_fast() {
   if [[ ! -f "$web_root/index.html" && -f "$APP_DIR/web/index.html" ]]; then
     web_root="$APP_DIR/web"
   fi
-  mkdir -p /etc/nginx/conf.d
-  cat > /etc/nginx/conf.d/zxy-panel.conf <<EOF_NGINX
+  local candidate
+  mkdir -p "$(dirname "$HOST_NGINX_FILE")" || return
+  candidate=$(mktemp "$(dirname "$HOST_NGINX_FILE")/.zxy-panel-candidate-XXXXXX") || return
+  cat > "$candidate" <<EOF_NGINX || { rm -f "$candidate"; return 1; }
 server {
     listen ${PANEL_PORT};
     server_name _;
 
-    root ${web_root};
+    root "${web_root}";
     index index.html;
     client_max_body_size 20m;
 
@@ -857,8 +1098,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/api/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/api/\$1;
+    location ^~ /${WEB_BASE_PATH}/api/ {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -866,8 +1107,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/sub/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/sub/\$1;
+    location ^~ /${WEB_BASE_PATH}/sub/ {
+        proxy_pass http://127.0.0.1:${API_PORT}/sub/;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -875,8 +1116,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location ~ ^/${WEB_BASE_PATH}/s/(.*)\$ {
-        proxy_pass http://127.0.0.1:${API_PORT}/s/\$1;
+    location ^~ /${WEB_BASE_PATH}/s/ {
+        proxy_pass http://127.0.0.1:${API_PORT}/s/;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -903,9 +1144,10 @@ server {
     }
 }
 EOF_NGINX
-  nginx -t
-  systemctl enable nginx >/dev/null 2>&1 || true
-  systemctl restart nginx
+  local status=0
+  publish_host_nginx "$candidate" || status=$?
+  rm -f "$candidate" || { fail 'Nginx temporary file cleanup failed.'; return 1; }
+  return "$status"
 }
 
 install_cli() {
@@ -1247,6 +1489,7 @@ main() {
     fi
   fi
   preflight_runtime_ownership
+  preflight_host_nginx
   installer_backup_existing
   cleanup_old_runtime
 

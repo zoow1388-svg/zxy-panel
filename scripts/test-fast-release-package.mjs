@@ -41,22 +41,26 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         def __init__(self):
             super().__init__()
             self.urls = []
+            self.kinds = set()
         def handle_starttag(self, tag, attrs):
             attrs = dict(attrs)
             if tag == 'script' and 'src' in attrs:
                 self.urls.append(attrs['src'])
+                self.kinds.add('script')
             if tag == 'link' and attrs.get('rel') == 'stylesheet':
                 self.urls.append(attrs['href'])
+                self.kinds.add('stylesheet')
     assets = Assets()
     assets.feed(html)
     assert len(assets.urls) >= 2, 'missing frontend script or stylesheet'
+    assert assets.kinds == {'script', 'stylesheet'}, 'both frontend asset kinds required'
     for url in assets.urls:
         assert url.startswith('/assets/'), 'unexpected frontend base path: ' + url
         assert root + '/frontend/dist' + url in names, 'missing referenced frontend asset'
     print(json.dumps({'result': 'PASS', 'entries': len(names), 'executableModes': len(executables),
                       'frontendAssets': assets.urls}))
 `
-const result = spawnSync(python, ['-c', check, resolve(archive)], { encoding: 'utf8' })
+const result = spawnSync(python, ['-I', '-c', check, resolve(archive)], { encoding: 'utf8' })
 if (result.stdout) process.stdout.write(result.stdout)
 if (result.stderr) process.stderr.write(result.stderr)
 if (result.error) {

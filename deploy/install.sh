@@ -56,6 +56,10 @@ AGENT_UNIT_FILE=/etc/systemd/system/zxy-agent.service
 AGENT_ENV_FILE="$CONFIG_DIR/agent.env"
 HOST_NGINX_FILE=/etc/nginx/conf.d/zxy-panel.conf
 HOST_NGINX_PREVIOUS_HASH=''
+XRAY_DROPIN_FILE=/etc/systemd/system/xray.service.d/99-zxy-panel.conf
+BBR_CONF_FILE=/etc/sysctl.d/99-zxy-bbr.conf
+BBR_DISABLED_FILE=/etc/zxy-panel/bbr.disabled
+PRE_INSTALL_BACKUP=''
 OWNED_CONTAINER_IDS=()
 COMPOSE_PROJECT=""
 LOCAL_SERVER_NAME=""
@@ -272,6 +276,9 @@ validate_config_value() {
 
 resolve_existing_config() {
   local key old info_dir old_port='' old_path='' old_user='' old_password='' old_token=''
+  [[ ! -L "$INFO_FILE" && ( ! -e "$INFO_FILE" || -f "$INFO_FILE" ) ]] || {
+    fail 'Panel information must be a regular non-symlink file.'; return 1;
+  }
   [[ ! -L "$APP_DIR/.env" && ( ! -e "$APP_DIR/.env" || -f "$APP_DIR/.env" ) ]] || {
     fail 'Environment must be a regular non-symlink file.'; return 1;
   }
@@ -657,81 +664,71 @@ install_docker_if_missing() {
 }
 
 
+run_cli_function() {
+  local cli_app="$APP_DIR" cli_config="$CONFIG_DIR" cli_info="$INFO_FILE"
+  local cli_nginx="$HOST_NGINX_FILE" cli_api="$API_UNIT_FILE" cli_agent="$AGENT_UNIT_FILE"
+  local cli_dropin="$XRAY_DROPIN_FILE" cli_bbr="$BBR_CONF_FILE" cli_disabled="$BBR_DISABLED_FILE"
+  case "$1" in create_backup|health_check|report_runtime_state) ;; *) fail 'Unsupported internal CLI operation.'; return 1 ;; esac
+  (
+    source "$SRC_DIR/scripts/zxy-panel" || return
+    APP_DIR="$cli_app"; CONFIG_DIR="$cli_config"; PANEL_INFO="$cli_info"
+    HOST_NGINX_FILE="$cli_nginx"; API_UNIT_FILE="$cli_api"; AGENT_UNIT_FILE="$cli_agent"
+    XRAY_DROPIN_FILE="$cli_dropin"; BBR_CONF_FILE="$cli_bbr"; BBR_DISABLED_FILE="$cli_disabled"
+    "$@"
+  )
+}
+
 installer_backup_existing() {
   step "Pre-install backup"
-  local has_existing="false"
-  for item in \
-    "$APP_DIR/data/zxy-panel.json" \
-    "$APP_DIR/.env" \
-    "$INFO_FILE" \
-    "/etc/zxy-panel/xray/config.json" \
-    "/etc/nginx/conf.d/zxy-panel.conf" \
-    "/etc/systemd/system/zxy-panel-api.service" \
-    "/etc/systemd/system/zxy-agent.service" \
-    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf" \
-    "/etc/sysctl.d/99-zxy-bbr.conf" \
-    "/etc/zxy-panel/bbr.disabled"; do
-    if [[ -e "$item" ]]; then
-      has_existing="true"
-      break
-    fi
-  done
-
-  if [[ "$has_existing" != "true" ]]; then
+  PRE_INSTALL_BACKUP=''
+  if [[ ! -e "$DB_PATH" && ! -L "$DB_PATH" && ! -e "$APP_DIR/.env" &&
+        ! -e "$INFO_FILE" && ! -e "$AGENT_ENV_FILE" &&
+        ! -e "$BBR_DISABLED_FILE" && ! -L "$BBR_DISABLED_FILE" &&
+        ! -e "$BBR_CONF_FILE" && ! -L "$BBR_CONF_FILE" ]]; then
     echo "No existing ZXY Panel data/config found, skip pre-install backup."
     return 0
   fi
+  PRE_INSTALL_BACKUP=$(run_cli_function create_backup pre-install "$INSTALL_MODE") || {
+    run_cli_function report_runtime_state
+    fail 'Pre-install backup failed; no runtime cleanup or data removal was performed.'
+    return 1
+  }
+  [[ -f "$PRE_INSTALL_BACKUP" && ! -L "$PRE_INSTALL_BACKUP" ]] || { fail 'Pre-install backup publication is not confirmed.'; return 1; }
+  echo "Pre-install configuration/data backup created: $PRE_INSTALL_BACKUP"
+}
 
-  local backup_dir ts tmp root backup item copied=0
-  backup_dir="$APP_DIR/backups"
-  ts="$(date +%Y%m%d-%H%M%S)"
-  backup="$backup_dir/zxy-panel-backup-${ts}.tar.gz"
-  mkdir -p "$backup_dir"
-  tmp="$(mktemp -d)"
-  root="$tmp/root"
-  mkdir -p "$root"
-
-  cat > "$root/zxy-backup-meta.txt" <<EOF_META
-ZXY Panel backup
-created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-reason=pre-install
-source_host=$(hostname 2>/dev/null || echo unknown)
-from_version=$(panel_info_value VERSION || true)
-to_version=${VERSION}
-install_mode=$(panel_info_value INSTALL_MODE || true)
-EOF_META
-
-  local items=(
-    "$APP_DIR/data/zxy-panel.json"
-    "$APP_DIR/.env"
-    "$INFO_FILE"
-    "/etc/zxy-panel/xray/config.json"
-    "/etc/nginx/conf.d/zxy-panel.conf"
-    "/etc/systemd/system/zxy-panel-api.service"
-    "/etc/systemd/system/zxy-agent.service"
-    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"
-    "/etc/sysctl.d/99-zxy-bbr.conf"
-    "/etc/zxy-panel/bbr.disabled"
-  )
-
-  for item in "${items[@]}"; do
-    if [[ -e "$item" ]]; then
-      mkdir -p "$root$(dirname "$item")"
-      cp -a "$item" "$root$item"
-      copied=$((copied+1))
-    fi
-  done
-
-  if [[ "$copied" -eq 0 ]]; then
-    rm -rf "$tmp"
-    echo "No backup items copied, skip."
-    return 0
+clear_fresh_database() {
+  [[ "$FRESH_INSTALL" == true ]] || return 0
+  if [[ -e "$DB_PATH" || -L "$DB_PATH" || -e "$BBR_DISABLED_FILE" || -L "$BBR_DISABLED_FILE" ]]; then
+    if ! python3 - "$PRE_INSTALL_BACKUP" "$DB_PATH" "$BBR_DISABLED_FILE" <<'PY_FRESH_BACKUP'
+import hashlib, json, sys, tarfile
+from pathlib import Path
+try:
+    archive, path, disabled = map(Path, sys.argv[1:])
+    if not archive.is_file() or archive.is_symlink(): raise ValueError()
+    with tarfile.open(str(archive), 'r:gz') as source:
+        entries = source.getmembers()
+        names = [m.name for m in entries]
+        if len(names) != len(set(names)) or any(not m.isreg() or m.size > 268435456 for m in entries): raise ValueError()
+        meta = json.load(source.extractfile('manifest.json'))
+        if meta.get('format') != 'zxy-panel-config-data-v1': raise ValueError()
+        if meta.get('database_path') != str(path): raise ValueError()
+        for key, target in [('database',path),('bbr_disabled',disabled)]:
+            if not target.exists() and not target.is_symlink(): continue
+            if target.is_symlink() or not target.is_file(): raise ValueError()
+            value = source.extractfile('files/'+key).read(268435457)
+            record = meta['files'][key]
+            sha = hashlib.sha256(value).hexdigest()
+            if len(value) > 268435456 or len(value) != record['size'] or sha != record['sha256']: raise ValueError()
+            if hashlib.sha256(target.read_bytes()).hexdigest() != sha: raise ValueError()
+except (OSError, ValueError, KeyError, TypeError, tarfile.TarError):
+    raise SystemExit('ERROR: fresh data removal has no matching unchanged backup; data retained.')
+PY_FRESH_BACKUP
+    then run_cli_function report_runtime_state; return 1; fi
   fi
-
-  tar -C "$root" -czf "$backup" .
-  chmod 600 "$backup" 2>/dev/null || true
-  rm -rf "$tmp"
-  echo "Pre-install backup created: $backup"
+  rm -f "$DB_PATH" || { run_cli_function report_runtime_state; return 1; }
+  # Unknown ancillary files are not owned database records and are retained.
+  rm -f "$BBR_DISABLED_FILE" || { run_cli_function report_runtime_state; return 1; }
 }
 
 cleanup_old_runtime() {
@@ -749,8 +746,11 @@ cleanup_old_runtime() {
 }
 
 write_panel_info() {
-  mkdir -p "$CONFIG_DIR"
-  cat > "$INFO_FILE" <<EOF_INFO
+  local temporary
+  mkdir -p "$CONFIG_DIR" || return
+  [[ ! -L "$INFO_FILE" ]] || { fail 'Panel information must not be a symlink.'; return 1; }
+  temporary=$(mktemp "$CONFIG_DIR/.panel-info-XXXXXX") || return
+  cat > "$temporary" <<EOF_INFO || { rm -f "$temporary"; return 1; }
 USERNAME=${ADMIN_USERNAME}
 PASSWORD=${ADMIN_PASSWORD_DISPLAY}
 PORT=${PANEL_PORT}
@@ -771,7 +771,9 @@ AUTO_AGENT=${AUTO_AGENT}
 INSTALL_XRAY=${INSTALL_XRAY}
 SETUP_XRAY_SERVICE=${SETUP_XRAY_SERVICE}
 EOF_INFO
-  chmod 600 "$INFO_FILE"
+  chmod 600 "$temporary" && mv "$temporary" "$INFO_FILE" || {
+    rm -f "$temporary"; fail 'Panel information write failed; previous file retained.'; return 1;
+  }
 }
 
 nginx_file_fingerprint() {
@@ -1152,7 +1154,28 @@ EOF_NGINX
 
 install_cli() {
   step "Installing zxy-panel CLI"
-  install -m 0755 "$APP_DIR/scripts/zxy-panel" /usr/local/bin/zxy-panel
+  python3 - "$APP_DIR/scripts/zxy-panel" "$CONFIG_DIR" /usr/local/bin/zxy-panel <<'PY_INSTALL_CLI'
+import os, shlex, sys, tempfile
+from pathlib import Path
+source, config, destination = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+temporary = None
+try:
+    text = source.read_text(encoding='utf-8')
+    marker = 'CONFIG_DIR="/etc/zxy-panel"'
+    if text.count(marker) != 1 or destination.is_symlink(): raise ValueError()
+    text = text.replace(marker, 'CONFIG_DIR=' + shlex.quote(config), 1)
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n', dir=str(destination.parent), delete=False) as f:
+        temporary = f.name
+        os.chmod(temporary, 0o755)
+        f.write(text)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(temporary, str(destination))
+    temporary = None
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('ERROR: CLI publication failed; previous command retained.')
+finally:
+    if temporary and os.path.exists(temporary): os.unlink(temporary)
+PY_INSTALL_CLI
 }
 
 install_netopt() {
@@ -1199,9 +1222,10 @@ allow_local_firewall() {
 post_install_self_check() {
   step "Post-install self check"
   if command -v zxy-panel >/dev/null 2>&1; then
-    zxy-panel doctor || true
+    zxy-panel doctor || { run_cli_function report_runtime_state; return 1; }
   else
-    echo "zxy-panel CLI not found, skip doctor check."
+    fail 'Installed CLI is missing; installation success is not confirmed.'
+    return 1
   fi
 }
 
@@ -1244,13 +1268,14 @@ print_result() {
 wait_api() {
   step "Waiting for API"
   for i in $(seq 1 90); do
-    if curl -fsS "http://127.0.0.1:${API_PORT}/api/health" >/dev/null 2>&1; then
+    if run_cli_function health_check "http://127.0.0.1:${API_PORT}/api/health" "$VERSION"; then
       echo "API is ready."
       return 0
     fi
     sleep 1
   done
   echo "ERROR: API not ready."
+  run_cli_function report_runtime_state
   if [[ "${INSTALL_MODE}" == "fast" ]]; then
     echo "Check logs: journalctl -u zxy-panel-api -n 120 --no-pager"
   else
@@ -1439,8 +1464,8 @@ LimitNOFILE=1000000
 WantedBy=multi-user.target
 EOF_SERVICE
   systemctl daemon-reload
-  systemctl enable zxy-panel-api >/dev/null 2>&1 || true
-  systemctl restart zxy-panel-api
+  systemctl enable zxy-panel-api || { run_cli_function report_runtime_state; return 1; }
+  systemctl restart zxy-panel-api || { run_cli_function report_runtime_state; return 1; }
 }
 
 start_docker_runtime() {
@@ -1496,19 +1521,8 @@ main() {
   step "Preparing directories"
   mkdir -p "$APP_DIR" "$APP_DIR/backups" "$CONFIG_DIR"
 
-  if [[ "$FRESH_INSTALL" == "true" ]]; then
-    echo "Fresh install enabled: backing up and clearing old data."
-    if [[ -d "$APP_DIR/data" ]]; then
-      tar -czf "$APP_DIR/backups/data-before-fresh-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$APP_DIR" data || true
-      rm -rf "$APP_DIR/data"
-    fi
-    rm -f /etc/zxy-panel/bbr.disabled
-  fi
-
+  clear_fresh_database
   mkdir -p "$APP_DIR/data"
-  if [[ -d "$APP_DIR/data" ]]; then
-    tar -czf "$APP_DIR/backups/data-backup-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$APP_DIR" data || true
-  fi
 
   copy_package_files
   cd "$APP_DIR"

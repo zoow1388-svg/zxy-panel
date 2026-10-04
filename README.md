@@ -5,7 +5,7 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 ## 当前版本
 
 - 源码开发版本：`0.7.8-stable-engineering`
-- 开发状态：未发布；本阶段仅处理版本一致性，保留已有 BBR 改动。
+- 开发状态：未发布；保留 BBR、版本治理和 R1/R1.5 护栏，正在验收安装、路由及运维可靠性整改。
 - 最新已发布版本：`0.7.7.5-stability-polish-agent-xray`
 - 发布标签：`v0.7.7.5`
 - 发布时间：`2026-07-03`
@@ -31,6 +31,8 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 
 ## 一键安装
 
+以下公开入口读取已发布清单，不会安装尚未发布的本地候选。当前候选仅面向可销毁测试机；目标系统为 Ubuntu 22.04 / Debian 12、Linux amd64、systemd。旧系统、ARM、跨模式迁移及 Docker 外部数据库不在本轮承诺内。真实安装/升级/快照恢复验收尚未完成。
+
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/install.sh)
 ```
@@ -44,11 +46,13 @@ bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/in
 
 ## 一键升级
 
+该命令检查清单并打印待审核的升级命令，不会立即安装。生成命令先验证 SHA256 和 ZIP 路径，再执行安装器；安装失败不会被日志管道隐藏。相同或更高版本不生成降级命令，自定义 APP_DIR/CONFIG_DIR 会带入命令。详见 [升级说明](docs/UPGRADE.md)。
+
 ```bash
 zxy-panel update
 ```
 
-或直接重新执行安装入口，安装脚本会读取远程版本清单并部署当前稳定测试包：
+也可以重新执行公开安装入口，读取正式清单；不得将它当作本地候选的测试入口：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/install.sh)
@@ -59,11 +63,11 @@ bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/in
 ```bash
 zxy-panel info
 zxy-panel status
-zxy-panel start
-zxy-panel stop
 zxy-panel restart
 zxy-panel logs
 zxy-panel doctor
+zxy-panel backup
+zxy-panel backup-list
 zxy-panel update
 zxy-panel uninstall
 ```
@@ -89,12 +93,15 @@ V0.7.7.5 是基于 V0.7.7.4 的稳定性收尾版本，不增加高风险新功�
 zxy-panel doctor
 ```
 
-全新安装未创建客户和入站前，备份与绑定检查会显示 INFO；创建入站并绑定客户后，正常结果应包含：
+doctor 检查实际部署模式、端口、可选组件、数据库及 API/Nginx 健康 JSON 和版本。无备份或未安装可选组件显示 INFO；PASS 不等于客户端联网、绑定深度核验或真实部署验收通过。基本健康检查通过时包含：
 
 ```text
 Doctor result: PASS
-Xray binding consistency - binding(s) verified
 ```
+
+## 配置与数据恢复
+
+配置/数据备份不包含程序。恢复只接受本 CLI 新格式、同安装目录/配置目录/数据库映射及同模式的可信备份，保留当前程序、服务定义和 Nginx 路由。旧式系统根目录归档不自动解压。整版回滚须使用预先验证的完整虚拟机和数据盘快照，不要用旧包重新安装代替回滚。
 
 ## Clash Verge / Mihomo 使用提醒
 

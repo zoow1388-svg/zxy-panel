@@ -1,69 +1,54 @@
-# ZXY Panel V0.7.7.1 Node Diagnosis Patch
+# ZXY Panel fast/systemd 安装
 
-## 目标
+## 范围与状态
 
-把默认安装从“客户服务器现场 Docker build / Go build / Node build”改成“预构建产物直接运行”。
+源码 `0.7.8-stable-engineering`，候选未发布，尚缺可销毁测试机的安装/升级/完整快照验收。
+目标为 Ubuntu 22.04 / Debian 12、Linux amd64、systemd。旧系统、ARM 和容器内冒充宿主机不在本轮范围。
+公开一键安装读取正式清单，不安装本地候选；隔离通过不构成安装耗时承诺。
 
-优化后首次安装目标：
+## 产物与服务
 
-- 干净 Ubuntu：1-3 分钟
-- 已有 nginx / ca-certificates / python3：30-60 秒
-- 升级补丁：10-30 秒
+- API：bin/zxy-panel-api-linux-amd64，systemd zxy-panel-api。
+- Agent：bin/zxy-agent-linux-amd64，可选宿主机服务 zxy-agent。
+- 前端：当前源码构建的 frontend/dist，宿主机 Nginx 托管，不启动前端容器。
+- 默认根目录 /opt/zxy-panel、配置 /etc/zxy-panel，支持经过验证的显式/既有目录。
+- 默认 DB data/zxy-panel.json；fast 保留合法真实指针，Docker 不新增外部 DB 映射。
+- API 默认回环 127.0.0.1:8088，实际端口从配置读取。面板端口与 WebBasePath 沿用旧值或新装随机生成。
+- API/sub/s 根路径和随机前缀均支持，查询参数保留。assets 和 Vue history 刷新必须在真实 Nginx 验证。
 
-## 改动点
+## 构建
 
-1. `deploy/install.sh`
-   - 新增 `ZXY_INSTALL_MODE=auto|fast|docker`
-   - 检测到 `bin/zxy-panel-api-linux-amd64`、`bin/zxy-agent-linux-amd64`、`frontend/dist/index.html` 时自动进入 fast 模式
-   - fast 模式跳过 Docker、docker-compose、Go 镜像、Node 镜像、npm 现场构建
-   - Nginx 直接托管前端 dist 并反代 API/sub/s
-   - 缺少预构建产物时自动回退 docker 兼容模式
-
-2. `deploy/agent-install.sh`
-   - Agent 优先使用内置二进制
-   - Xray 优先使用内置 `bin/xray-linux-amd64`
-   - 没有内置 Xray 时才走官方脚本下载
-
-3. `scripts/zxy-panel`
-   - 支持 fast/systemd 模式的 `status`、`restart`、`logs`、`reset-password`、`uninstall`
-   - 兼容旧 Docker 模式
-
-4. `scripts/build-fast-release.sh`
-   - 自动构建后端 API、Agent、前端 dist
-   - 自动打包 `zxy-panel-v版本-node-diagnosis-center.zip`
-   - 自动输出 SHA256 和 `version.fast.json`
-
-5. `.github/workflows/build-fast-release.yml`
-   - 支持 GitHub Actions 手动构建 fast release artifact
-   - 支持 tag 发布时自动生成 GitHub Release 资产
-
-## 使用方式
-
-把本补丁包里的文件覆盖到仓库根目录后执行：
+只在独立可写源码副本构建；脚本会更新该副本 bin/dist 并重建 dist-release，不能在冻结工作树执行。
 
 ```bash
-bash scripts/build-fast-release.sh 0.7.5.8
+bash scripts/build-fast-release.sh 0.7.8 stable-engineering
 ```
 
-构建完成后会生成：
+读取 VERSION 并拒绝版本不一致，构建 Linux amd64 API/Agent 和前端，生成 ZIP/SHA256/外部 version.fast.json 模板。
+冻结 frontend/dist 不代表新源码产物，必须核对生成资产和源码提交。正式 download_url/SHA256 仅在发布获批后更新。
 
-```text
-dist-release/zxy-panel-v0.7.7.1-node-diagnosis-center.zip
-dist-release/version.fast.json
-```
+## 测试机安装
 
-把 zip 上传到 GitHub Release，再把 `version.fast.json` 中的 `download_url` 替换成真实 Release 下载地址，并更新主 `version.json`。
-
-## 临时强制 fast 模式测试
+以下只供已授权、可恢复完整快照的临时测试机，不在开发宿主机或当前 WSL 运行。
 
 ```bash
 ZXY_INSTALL_MODE=fast bash deploy/install.sh
 ```
 
-如果缺少预构建产物，fast 模式会直接报错；auto 模式会自动回退 Docker。
+auto 仅在新装缺预构建产物时回退 Docker；显式 fast 缺产物提前拒绝。
+既有模式须明确，歧义或跨模式请求提前拒绝。fast 不默认安装 Docker，不现场构建前后端。
+依赖/Xray 已存在时复用，缺失才走安装流程；没有实际测速前不宣称安装秒数。
+AUTO_AGENT=false 不安装/改写其配置，不擅自停止已有 Agent/Xray；已有 Agent 须保持合法身份和运行参数。
+FRESH_INSTALL=true 会清理经过匹配备份验证的正式 DB，并受既有 Agent 身份护栏限制；不是常规升级。
 
-## 回退 Docker 兼容模式
+## Docker 兼容入口
 
 ```bash
 ZXY_INSTALL_MODE=docker bash deploy/install.sh
 ```
+
+仅同模式或干净新装，保留原 Compose 项目、回环监听和 app/data 绑定。旧 Docker 现场构建仍可能耗时较长。
+容器名不等于归属，须确认本地 context、项目标签、配置/工作目录和数据挂载。
+Docker 配置/数据恢复另要求 Compose 能输出 JSON 配置并支持 `up --pull never`；缺少能力时拒绝恢复，不代表不能使用原安装入口。
+安装完成前须确认 API health JSON 的 service/status/version 和 doctor。PASS 不代替 Agent/Xray/客户联网、完整绑定核验或回滚。
+失败必须非零并保留恢复证据。升级、配置/数据恢复与整版回滚见 [UPGRADE.md](UPGRADE.md)。

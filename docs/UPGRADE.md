@@ -1,40 +1,69 @@
-# ZXY Panel 升级说明
+# ZXY Panel 升级与恢复边界
 
-## 推荐升级命令
+## 当前状态
+
+源码为 `0.7.8-stable-engineering`，本地候选未正式发布；正式 version.json、标签、公开地址和 SHA256 本轮不更新。
+本轮验收 Ubuntu 22.04 / Debian 12、Linux amd64、systemd。隔离通过不代替真实安装、Agent/Xray、重启和快照恢复。
+
+## 升级前
+
+1. 核对实际模式、版本、端口、WebBasePath、APP_DIR/CONFIG_DIR 和数据库指针。
+2. 准备可销毁测试机、独立控制台及完整系统盘/数据盘快照，并实际验证恢复。
+3. 保存准确旧包/SHA256、当前程序、配置、数据和 Docker 镜像。
+4. 暂停其它安装/恢复/配置写入者；CLI 不提供跨进程事务或对非配合 root 写入者的保护。
+5. 创建配置/数据备份并检查退出码，失败不得继续。备份可能含凭据，应私密保管。
+
+```bash
+zxy-panel info
+zxy-panel doctor
+zxy-panel backup
+```
+
+0.7.4 与正式清单 0.7.5 的最早升级起点差异仍需确认，不自行扩大承诺。
+本地已核验 0.7.5.5 和 0.7.7.5 包的 SHA256；不代表实际升级已通过。
+
+## 检查并生成命令
 
 ```bash
 zxy-panel update
 ```
 
-也可以执行安装入口完成稳定版本更新：
+显式环境变量优先，其次安装 .env 的 HTTPS 清单；字段缺失才用默认地址，显式空值不悄悄回退。
+清单必须有合法版本、包名、HTTPS URL 和 SHA256。命令只打印供审核，不自动安装；数字版本比较禁止降级。
+打印命令保留当前安装根目录，校验 SHA256、ZIP 路径/成员和完整性后才执行安装器；日志管道保留安装退出码。
 
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/install.sh)
-```
-
-## 系统升级页配置
-
-后台系统升级页应配置：
+正式清单地址：
 
 ```text
 ZXY_UPDATE_MANIFEST_URL=https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json
 ```
 
-如果未配置远程版本清单，系统升级页应显示“未配置”，不要默认写入错误地址。
+同模式升级保留合法旧配置、账号、端口、路径、Agent 身份/Token/interval/APPLY_CONFIG 和数据库指针。
+真实显式输入优先，非法旧值拒绝而非猜测；跨模式迁移提前拒绝。Docker 不新增外部 DB 挂载。
+FRESH_INSTALL=true 是清理，不是升级：正式 JSON 和 BBR 禁用标记须有内容匹配、实际成员经过校验的备份；失败不清理，未知附属文件保留。
 
-## 升级前检查
+## 配置/数据恢复
 
-- 备份 `/etc/zxy-panel`。
-- 备份 `/opt/zxy-panel/data`。
-- 确认当前版本不低于 `0.7.4`。
-- 确认 `version.json` 中的 SHA256 与发布包一致。
-- 确认固定出口客户、直连客户、SOCKS5 路由中转配置未被覆盖。
-
-## 回滚建议
-
-保留每次发布的 ZIP 与 `SHA256SUMS`。如果升级异常，可解压上一版本发布包并重新执行：
+以下命令只在单独获批测试机/维护窗口执行，不在开发宿主机、当前 WSL 或业务机试运行。
 
 ```bash
-cd /root/zxy-panel-<version>
-bash deploy/install.sh
+zxy-panel backup-list
+zxy-panel restore /absolute/path/to/zxy-panel-backup-unique.tar.gz
 ```
+
+- 仅接受本 CLI 的 zxy-panel-config-data-v1 私密可信归档；内部哈希没有签名，不能证明外部来源可信。
+- 拒绝未知路径、链接、重复成员、非普通文件、错误哈希、非法 JSON、跨模式/目录/DB 映射和 Agent 身份不一致。
+- 端口、WebBasePath、组件及 Agent 运行映射须兼容，不迁移身份或历史数据。
+- 停止确认归属的写入者前预检、另建唯一安全备份；停止后保存失败恢复副本。
+- 恢复 DB、环境/面板信息、Agent/Xray 配置及 BBR 持久文件。保留当前程序、版本、服务定义和 Nginx 路由；这些定义的副本仅是人工恢复证据。
+- Docker 须支持 `config --format json` 和 `up --pull never`，确认声明与实际容器的数据库、挂载、端口及镜像一致，且镜像本地存在。仅用 `--no-build --pull never` 重建已确认项目；旧 Compose 缺少能力或映射不能确认时提前拒绝，不安装新工具或拉取替代镜像。
+- 失败非零并报告实际状态；安全时恢复原文件。写入者无法停止、外部写入或恢复失败时保留私密证据，不能声称运行已恢复。
+- 启动后健康验证失败，须再次确认写入者全部停止，才允许把运行期正常写入的 DB 恢复为恢复操作前的副本；失败运行期 DB 另行留证。其它文件出现非预期变化不覆盖。维护窗口内须无其它写入者、升级任务或待执行运维任务。
+- BBR 只恢复持久文件，不自动修改当前内核；部分设置需明确维护操作或重启。原已停止的可选服务不自动开启。
+- 旧绝对路径 tar 不再自动解压到 /，须单独人工审核或完整快照恢复。
+
+## 整版回滚与上线检查
+
+整版回滚使用已验证系统盘、外挂数据盘、程序/镜像及配置完整快照。旧 ZIP 重新执行安装器不是可靠回滚。
+失败先记录退出码、实际服务状态、日志和安全备份，不连续重装或删除证据。
+回滚后核对版本、账号、数据/日志、Agent 身份、全部健康路由、订阅参数、assets/SPA、客户连接、空闲 300 秒及重启恢复。

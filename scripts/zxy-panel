@@ -12,6 +12,9 @@ get_info() {
   fi
 }
 
+APP_DIR="$(get_info INSTALL_DIR)"
+APP_DIR="${APP_DIR:-/opt/zxy-panel}"
+
 compose_cmd() {
   if docker compose version >/dev/null 2>&1; then
     echo "docker compose"
@@ -22,14 +25,132 @@ compose_cmd() {
   fi
 }
 
+run_panel_compose() {
+  local engine key value raw project saved record name context
+  local -a command
+  engine=$(compose_cmd)
+  case "$engine" in
+    'docker compose') command=(docker compose) ;;
+    docker-compose) command=(docker-compose) ;;
+    *) echo 'ERROR: Docker Compose is unavailable.' >&2; return 1 ;;
+  esac
+  for key in DOCKER_HOST DOCKER_CONTEXT; do
+    value="${!key-}"
+    case "$key:$value" in DOCKER_HOST:|DOCKER_HOST:unix:///var/run/docker.sock|DOCKER_CONTEXT:|DOCKER_CONTEXT:default) ;;
+      *) echo 'ERROR: remote Docker context is outside this installation.' >&2; return 1 ;;
+    esac
+  done
+  context=$(docker context show) || { echo 'ERROR: cannot inspect Docker context.' >&2; return 1; }
+  [[ "$context" == default ]] || { echo 'ERROR: only the local default Docker context is supported.' >&2; return 1; }
+  saved=$(get_info COMPOSE_PROJECT)
+  project="$saved"
+  for name in zxy-panel-api zxy-panel-frontend; do
+    raw=$(docker inspect "$name" 2>/dev/null) || {
+      echo 'ERROR: existing Compose containers cannot be confirmed; no action taken.' >&2; return 1;
+    }
+    record=$(printf '%s' "$raw" | python3 -c '
+import json, re, sys
+try:
+    items = json.load(sys.stdin)
+    if not isinstance(items, list) or len(items) != 1: raise ValueError()
+    item = items[0]
+    labels = item.get("Config", {}).get("Labels") or {}
+    app, service = sys.argv[1:]
+    project = labels.get("com.docker.compose.project", "")
+    valid = isinstance(project, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project)
+    valid = valid and labels.get("com.docker.compose.service") == service
+    valid = valid and labels.get("com.docker.compose.project.working_dir") == app
+    valid = valid and labels.get("com.docker.compose.project.config_files") == app + "/docker-compose.yml"
+    if service == "zxy-panel-api":
+        valid = valid and any(m.get("Type") == "bind" and m.get("Source") == app + "/data" and m.get("Destination") == "/app/data" for m in item.get("Mounts", []))
+    if not valid: raise ValueError()
+    print(project)
+except (ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+' "$APP_DIR" "$name") || { echo 'ERROR: container ownership is ambiguous; no Compose action taken.' >&2; return 1; }
+    [[ -z "$project" || "$project" == "$record" ]] || { echo 'ERROR: Compose project conflict.' >&2; return 1; }
+    project="$record"
+  done
+  local scope
+  scope=$(python3 - "$APP_DIR/.env" <<'PY_COMPOSE_SCOPE'
+import re, sys
+from pathlib import Path
+try:
+    for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+        if not re.match(r'(COMPOSE_FILE|COMPOSE_PROJECT_NAME|DOCKER_HOST|DOCKER_CONTEXT)=', line): continue
+        key, value = line.split('=', 1)
+        value = value.strip()
+        if value.startswith(("'", '"')):
+            if not value.endswith(value[0]): raise ValueError()
+            value = value[1:-1]
+        if any(c in value for c in '\x00\r\n'): raise ValueError()
+        print(key + '=' + value)
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('ERROR: Compose scope cannot be read safely.')
+PY_COMPOSE_SCOPE
+  ) || return
+  local -a configured=()
+  while IFS= read -r record; do [[ -z "$record" ]] || configured+=("$record"); done <<< "$scope"
+  for key in COMPOSE_FILE COMPOSE_PROJECT_NAME DOCKER_HOST DOCKER_CONTEXT; do
+    configured+=("$key=${!key-}")
+  done
+  for record in "${configured[@]}"; do
+    key="${record%%=*}"; value="${record#*=}"
+    case "$key" in
+      COMPOSE_FILE) [[ -z "$value" || "$value" == "$APP_DIR/docker-compose.yml" ]] ;;
+      COMPOSE_PROJECT_NAME) [[ -z "$value" || "$value" == "$project" ]] ;;
+      DOCKER_HOST) [[ -z "$value" || "$value" == unix:///var/run/docker.sock ]] ;;
+      DOCKER_CONTEXT) [[ -z "$value" || "$value" == default ]] ;;
+    esac || { echo "ERROR: conflicting $key; no Compose action taken." >&2; return 1; }
+  done
+  COMPOSE_REMOVE_ORPHANS=false COMPOSE_IGNORE_ORPHANS=false COMPOSE_PROFILES='' \
+    "${command[@]}" -p "$project" -f "$APP_DIR/docker-compose.yml" \
+    --project-directory "$APP_DIR" --env-file "$APP_DIR/.env" "$@"
+}
+
 install_mode() {
-  get_info INSTALL_MODE || true
+  local mode directory execution environment fast=false docker=false raw
+  mode=$(get_info INSTALL_MODE)
+  case "$mode" in
+    fast|docker) printf '%s\n' "$mode"; return ;;
+    '') ;;
+    *) echo 'ERROR: invalid installation mode.' >&2; return 1 ;;
+  esac
+  directory=$(systemctl show zxy-panel-api -p WorkingDirectory --value 2>/dev/null || true)
+  execution=$(systemctl show zxy-panel-api -p ExecStart --value 2>/dev/null || true)
+  environment=$(systemctl show zxy-panel-api -p EnvironmentFiles --value 2>/dev/null || true)
+  if [[ "$directory" == "$APP_DIR" && "$environment" == "$APP_DIR/.env (ignore_errors=no)" ]] &&
+    [[ "$execution" == *"path=$APP_DIR/bin/zxy-panel-api-linux-amd64 ;"* || "$execution" == *"path=$APP_DIR/bin/zxy-panel-api ;"* ]]; then fast=true; fi
+  if command -v docker >/dev/null 2>&1; then
+    raw=$(docker inspect zxy-panel-api 2>/dev/null || true)
+    if [[ -n "$raw" ]] && printf '%s' "$raw" | python3 -c '
+import json, sys
+try:
+    items = json.load(sys.stdin)
+    if not isinstance(items, list) or len(items) != 1: raise ValueError()
+    item = items[0]
+    labels = item.get("Config", {}).get("Labels") or {}
+    app = sys.argv[1]
+    valid = labels.get("com.docker.compose.service") == "zxy-panel-api"
+    valid = valid and labels.get("com.docker.compose.project.working_dir") == app
+    valid = valid and labels.get("com.docker.compose.project.config_files") == app + "/docker-compose.yml"
+    valid = valid and bool(labels.get("com.docker.compose.project"))
+    valid = valid and any(m.get("Type") == "bind" and m.get("Source") == app + "/data" and m.get("Destination") == "/app/data" for m in item.get("Mounts", []))
+    raise SystemExit(0 if valid else 1)
+except (ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+' "$APP_DIR"; then docker=true; fi
+  fi
+  if [[ "$fast" == true && "$docker" == false ]]; then printf 'fast\n'
+  elif [[ "$docker" == true && "$fast" == false ]]; then printf 'docker\n'
+  else echo 'ERROR: installation mode cannot be confirmed; no service selected.' >&2; return 1
+  fi
 }
 
 restart_api() {
   local mode
   mode="$(install_mode)"
-  if [[ "$mode" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+  if [[ "$mode" == "fast" ]]; then
     systemctl restart zxy-panel-api
     return
   fi
@@ -40,7 +161,7 @@ restart_api() {
     exit 1
   fi
   cd "$APP_DIR"
-  $compose restart zxy-panel-api >/dev/null
+  run_panel_compose restart zxy-panel-api >/dev/null
 }
 
 status_line() {
@@ -218,7 +339,7 @@ case "${1:-}" in
     ACCESS_URL=$(get_info ACCESS_URL)
     DATABASE=$(get_info DATABASE)
     VERSION=$(get_info VERSION)
-    MODE=$(get_info INSTALL_MODE)
+    MODE=$(install_mode)
     SHOW_SECRET="false"
     if [[ "${2:-}" == "--show-secret" ]]; then
       SHOW_SECRET="true"
@@ -250,7 +371,7 @@ case "${1:-}" in
 
   status)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == "fast" ]]; then
       systemctl status zxy-panel-api --no-pager -l 2>/dev/null || true
       echo
       systemctl status zxy-agent --no-pager -l 2>/dev/null || true
@@ -260,7 +381,7 @@ case "${1:-}" in
       COMPOSE=$(compose_cmd)
       if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
         cd "$APP_DIR"
-        $COMPOSE ps || true
+        run_panel_compose ps
         echo
         systemctl status zxy-agent --no-pager -l 2>/dev/null || true
         systemctl status nginx --no-pager -l 2>/dev/null || true
@@ -272,7 +393,7 @@ case "${1:-}" in
 
   restart)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == "fast" ]]; then
       systemctl restart zxy-panel-api 2>/dev/null || true
       systemctl restart zxy-agent 2>/dev/null || true
       systemctl restart nginx 2>/dev/null || true
@@ -283,7 +404,7 @@ case "${1:-}" in
         exit 1
       fi
       cd "$APP_DIR"
-      $COMPOSE restart
+      run_panel_compose restart
       systemctl restart zxy-agent 2>/dev/null || true
       systemctl restart nginx 2>/dev/null || true
     fi
@@ -292,7 +413,7 @@ case "${1:-}" in
 
   logs)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == "fast" ]]; then
       echo "Showing fast-mode logs. Ctrl+C to exit."
       journalctl -u zxy-panel-api -u zxy-agent -f --no-pager
     else
@@ -302,7 +423,7 @@ case "${1:-}" in
         exit 1
       fi
       cd "$APP_DIR"
-      $COMPOSE logs --tail=120 -f
+      run_panel_compose logs --tail=120 -f
     fi
     ;;
 
@@ -514,15 +635,17 @@ PY_UPDATE
 
   uninstall)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == docker ]]; then
+      run_panel_compose config --quiet
+    fi
+    if [[ "$MODE" == "fast" ]]; then
       systemctl stop zxy-panel-api 2>/dev/null || true
       systemctl disable zxy-panel-api 2>/dev/null || true
       rm -f /etc/systemd/system/zxy-panel-api.service
     fi
-    COMPOSE=$(compose_cmd)
-    if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
+    if [[ "$MODE" == docker ]]; then
       cd "$APP_DIR"
-      $COMPOSE down || true
+      run_panel_compose down
     fi
     systemctl stop zxy-agent 2>/dev/null || true
     systemctl disable zxy-agent 2>/dev/null || true

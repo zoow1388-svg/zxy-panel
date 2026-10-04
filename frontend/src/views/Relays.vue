@@ -13,6 +13,7 @@ const selectedRelayId = ref('')
 const selectedClientId = ref('')
 const testResult = ref<any>(null)
 const testingSocks = ref(false)
+const creatingRelay = ref(false)
 const savedOutlets = ref<any[]>([])
 const selectedSavedOutletId = ref('')
 const showRelayEditor = ref(false)
@@ -232,23 +233,26 @@ async function testManualSocks() {
 }
 
 async function createRelay() {
+  if (creatingRelay.value) return
   error.value = ''; message.value = ''
   const err = validate()
   if (err) { error.value = err; return }
+  const submittedForm = { ...form.value }
+  creatingRelay.value = true
   try {
-    const payload = { ...form.value, relay_port: Number(form.value.relay_port), manual_socks_port: Number(form.value.manual_socks_port || 0), relay_network: form.value.route_mode === 'socks5_route' ? 'tcp' : (form.value.relay_network || 'tcp') }
-    await api('/api/relays', { method:'POST', body: JSON.stringify(payload) })
-  } catch(e:unknown) { showMutationError(e); return }
-  message.value = form.value.route_mode === 'socks5_route' ? 'SOCKS5 路由中转已创建。本机 Agent 同步后，中转服务器会生成 VLESS Reality 入站、SOCKS5 出站和路由绑定。' : 'TCP 透传中转线路已创建。Agent 同步后，中转服务器会监听该端口并转发到落地 Reality 节点。'
-  const keepServer = form.value.relay_server_id
-  const keepHost = form.value.relay_host
-  form.value = defaultForm()
-  form.value.relay_server_id = keepServer
-  form.value.relay_host = keepHost
-  fillRelayHost()
-  ensureLandingDefault()
-  showRelayEditor.value = false
-  await refreshAfterMutation()
+    try {
+      const payload = { ...submittedForm, relay_port: Number(submittedForm.relay_port), manual_socks_port: Number(submittedForm.manual_socks_port || 0), relay_network: submittedForm.route_mode === 'socks5_route' ? 'tcp' : (submittedForm.relay_network || 'tcp') }
+      await api('/api/relays', { method:'POST', body: JSON.stringify(payload) })
+    } catch(e:unknown) { showMutationError(e); return }
+    message.value = submittedForm.route_mode === 'socks5_route' ? 'SOCKS5 路由中转已创建。本机 Agent 同步后，中转服务器会生成 VLESS Reality 入站、SOCKS5 出站和路由绑定。' : 'TCP 透传中转线路已创建。Agent 同步后，中转服务器会监听该端口并转发到落地 Reality 节点。'
+    form.value = defaultForm()
+    form.value.relay_server_id = submittedForm.relay_server_id
+    form.value.relay_host = submittedForm.relay_host
+    fillRelayHost()
+    ensureLandingDefault()
+    showRelayEditor.value = false
+    await refreshAfterMutation()
+  } finally { creatingRelay.value = false }
 }
 
 async function removeRelay(id:string) {
@@ -335,7 +339,7 @@ onMounted(() => { loadSavedOutlets(); load() })
       <h1 class="page-title">中转管理</h1>
       <p class="page-desc">V0.7.8 中转管理稳定版：这里只作为线路运维视图，客户节点统一到客户管理里分享。</p>
     </div>
-    <div class="head-actions"><button class="btn" @click="showRelayEditor = true">新增中转线路</button></div>
+    <div class="head-actions"><button class="btn" :disabled="creatingRelay" @click="showRelayEditor = true">新增中转线路</button></div>
   </div>
 
   <div class="notice ok">推荐使用 SOCKS5 路由中转：客户连接中转服务器 VLESS Reality 入站，Xray 路由到落地 SOCKS5，平台看到落地服务器 IP。</div>
@@ -343,15 +347,15 @@ onMounted(() => { loadSavedOutlets(); load() })
   <div class="error" v-if="error">{{ error }}</div>
   <div class="success" v-if="message">{{ message }}</div>
 
-  <div v-if="showRelayEditor" class="modal-mask" @click.self="showRelayEditor = false">
-    <div class="modal-card relay-editor-modal">
+  <div v-if="showRelayEditor" class="modal-mask" @click.self="!creatingRelay && (showRelayEditor = false)">
+    <div class="modal-card relay-editor-modal" :inert="creatingRelay">
       <div class="modal-head">
         <div>
           <span class="eyebrow">中转配置</span>
           <h2>新增中转线路</h2>
           <p>按 标准 SOCKS5 路由中转逻辑配置：中转入站 → SOCKS5 出站 → 路由绑定。普通测试只需要填写远程 SOCKS5 和中转端口。</p>
         </div>
-        <button class="icon-btn" @click="showRelayEditor = false">×</button>
+        <button class="icon-btn" :disabled="creatingRelay" @click="showRelayEditor = false">×</button>
       </div>
 
       <div class="relay-step"><strong>1. 选择中转模式</strong><span>推荐 SOCKS5 路由中转；旧 TCP 透传保留给已测通的 Reality 落地线路。</span></div>
@@ -399,7 +403,7 @@ onMounted(() => { loadSavedOutlets(); load() })
         <button class="btn secondary" v-if="formUsesManualSocks" @click="saveCurrentOutlet">保存到落地出口库</button>
         <button class="btn secondary" v-if="formUsesManualSocks && savedOutlets.length" @click="removeSavedOutlet">删除所选出口</button>
         <button class="btn secondary" v-if="formUsesManualSocks" @click="copyOutletFirewall">复制出口端口放行命令</button>
-        <button class="btn" @click="createRelay">新增中转线路</button>
+        <button class="btn" :disabled="creatingRelay" @click="createRelay">新增中转线路</button>
       </div>
     </div>
   </div>

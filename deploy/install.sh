@@ -1453,8 +1453,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory="${APP_DIR}"
-EnvironmentFile="${APP_DIR}/.env"
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${APP_DIR}/.env
 ExecStart="${api_bin}"
 Restart=always
 RestartSec=5

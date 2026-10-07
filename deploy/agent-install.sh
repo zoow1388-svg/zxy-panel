@@ -168,16 +168,45 @@ xray_service_owned() {
   execution=$(systemctl show xray -p ExecStart --value) || return
   user=$(systemctl show xray -p User --value) || return
   group=$(systemctl show xray -p Group --value) || return
-  [[ "$state" == loaded && -f "$fragment" && "$dropins" == "$XRAY_DROPIN" && "$user" == root && "$group" == root ]] || return 1
-  ZXY_UNIT_EXECUTION="$execution" python3 - "$XRAY_DROPIN" "$previous_config" "$binary" <<'PY_OWNERSHIP'
+  [[ "$state" == loaded && -f "$fragment" && ! -L "$fragment" && "$user" == root && "$group" == root ]] || return 1
+  ZXY_UNIT_EXECUTION="$execution" ZXY_UNIT_DROPINS="$dropins" python3 - "$XRAY_DROPIN" "$previous_config" "$binary" <<'PY_OWNERSHIP'
 import os, re, shlex, sys
 from pathlib import Path
+
+def service_values(path, allowed):
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('untrusted drop-in')
+    section, values = '', {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith(('#', ';')):
+            continue
+        if line == '[Service]':
+            section = line
+            continue
+        if section != '[Service]' or '=' not in line:
+            raise ValueError('unexpected drop-in content')
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if key not in allowed:
+            raise ValueError('unexpected service directive')
+        values.setdefault(key, []).append(value.strip())
+    return values
+
 try:
-    values = {}
-    for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
-        if '=' in line and not line.lstrip().startswith(('#', ';')):
-            key, value = line.split('=', 1)
-            values.setdefault(key.strip(), []).append(value.strip())
+    panel = Path(sys.argv[1])
+    stock = panel.parent / '10-donot_touch_single_conf.conf'
+    paths = shlex.split(os.environ['ZXY_UNIT_DROPINS'])
+    # The official single-config default is safe only before our verified override.
+    if paths not in ([str(panel)], [str(stock), str(panel)]):
+        raise ValueError('unexpected drop-in list')
+    if len(paths) == 2:
+        defaults = service_values(stock, {'ExecStart'})
+        starts = defaults.get('ExecStart', [])
+        if len(starts) != 2 or starts[0] != '' or shlex.split(starts[1]) != [
+                sys.argv[3], 'run', '-config', '/usr/local/etc/xray/config.json']:
+            raise ValueError('modified single-config default')
+    values = service_values(panel, {'User', 'Group', 'ExecStart'})
     starts = values.get('ExecStart', [])
     valid = values.get('User') == ['root'] and values.get('Group') == ['root']
     valid = valid and starts[:1] == [''] and len(starts) == 2
@@ -387,7 +416,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile="$AGENT_ENV_FILE"
+EnvironmentFile=$AGENT_ENV_FILE
 ExecStart=/usr/local/bin/zxy-agent
 Restart=always
 RestartSec=5

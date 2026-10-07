@@ -22,7 +22,7 @@ class InstallGuardrails(unittest.TestCase):
         self.bin = self.root / "bin"
         for p in (self.app, self.config, self.source, self.bin):
             p.mkdir()
-        for command in ("bash", "python3", "date", "dirname", "grep", "head", "cut", "mkdir", "rm", "cp", "chmod", "mktemp", "tr"):
+        for command in ("bash", "python3", "date", "dirname", "grep", "head", "cut", "mkdir", "rm", "cp", "chmod", "mktemp", "tr", "cat"):
             actual = shutil.which(command)
             self.assertIsNotNone(actual, "Required existing tool: " + command)
             (self.bin / command).symlink_to(actual)
@@ -97,6 +97,128 @@ class InstallGuardrails(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(b"synthetic-asset")
             p.chmod(0o755)
+
+    def render_fast_api_unit(self, directory):
+        source = self.libs["install"].read_text(encoding="utf-8")
+        marker = "cat > /etc/systemd/system/zxy-panel-api.service <<EOF_SERVICE\n"
+        self.assertEqual(source.count(marker), 1)
+        template = source.split(marker, 1)[1].split("\nEOF_SERVICE", 1)[0]
+        # Render the actual heredoc without calling the system-writing function.
+        result = self.ok("install", 'api_bin="$APP_DIR/bin/zxy-panel-api-linux-amd64";\n'
+                         "cat <<EOF_SERVICE\n" + template + "\nEOF_SERVICE",
+                         updates={"APP_DIR": str(directory)})
+        self.assertEqual(self.trace.read_text(), "")
+        return result.stdout
+
+    def render_fast_agent_unit(self, directory):
+        source = self.libs["agent"].read_text(encoding="utf-8")
+        marker = 'cat > "$AGENT_UNIT_FILE" <<SERVICE\n'
+        self.assertEqual(source.count(marker), 1)
+        template = source.split(marker, 1)[1].split("\nSERVICE", 1)[0]
+        result = self.ok("agent", "cat <<SERVICE\n" + template + "\nSERVICE",
+                         updates={"CONFIG_DIR": str(directory)})
+        self.assertEqual(self.trace.read_text(), "")
+        return result.stdout
+
+    def verify_systemd_unit(self, content, name):
+        analyzer = shutil.which("systemd-analyze")
+        self.assertIsNotNone(analyzer, "Real systemd-analyze is required for template validation")
+        unit = self.root / name
+        unit.write_text(content, encoding="utf-8")
+        result = subprocess.run([analyzer, "verify", str(unit)], cwd=self.root,
+                                env={"PATH": os.defpath, "LANG": "C.UTF-8",
+                                     "SYSTEMD_LOG_LEVEL": "info"},
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(self.trace.read_text(), "")
+        print("systemd verify " + name + ": exit=" + str(result.returncode) +
+              "; diagnostics=" + repr(result.stdout + result.stderr))
+        return result
+
+    def assert_systemd_valid(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout + result.stderr, "", "Unexpected systemd diagnostics")
+
+    def verify_fast_api_unit(self, directory, quoted_directory=False, quoted_environment=False):
+        directory.mkdir(exist_ok=True)
+        (directory / ".env").write_text("API_PORT=9088\n", encoding="utf-8")
+        binary = directory / "bin/zxy-panel-api-linux-amd64"
+        binary.parent.mkdir(exist_ok=True)
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+        content = self.render_fast_api_unit(directory)
+        if quoted_directory:
+            content = content.replace("WorkingDirectory=" + str(directory) + "\n",
+                                      'WorkingDirectory="' + str(directory) + '"\n', 1)
+        if quoted_environment:
+            path = str(directory / ".env")
+            content = content.replace("EnvironmentFile=" + path + "\n",
+                                      'EnvironmentFile="' + path + '"\n', 1)
+        return self.verify_systemd_unit(content, "zxy-fast-api-validation.service")
+
+    def verify_fast_agent_unit(self, directory, quoted_environment=False):
+        directory.mkdir(exist_ok=True)
+        (directory / "agent.env").write_text("ZXY_APPLY_CONFIG=false\n", encoding="utf-8")
+        binary = directory / "synthetic-agent"
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+        content = self.render_fast_agent_unit(directory)
+        self.assertEqual(content.count("ExecStart=/usr/local/bin/zxy-agent\n"), 1)
+        # Substitute only the executable to avoid creating a real host Agent binary.
+        content = content.replace("ExecStart=/usr/local/bin/zxy-agent\n",
+                                  'ExecStart="' + str(binary) + '"\n', 1)
+        if quoted_environment:
+            path = str(directory / "agent.env")
+            content = content.replace("EnvironmentFile=" + path + "\n",
+                                      'EnvironmentFile="' + path + '"\n', 1)
+        return self.verify_systemd_unit(content, "zxy-fast-agent-validation.service")
+
+    def test_fast_api_unit_preserves_absolute_working_directory(self):
+        for directory in (self.app, self.root / "app with spaces"):
+            with self.subTest(directory=directory.name):
+                content = self.render_fast_api_unit(directory)
+                values = dict(line.split("=", 1) for line in content.splitlines() if "=" in line)
+                self.assertEqual(values["WorkingDirectory"], str(directory))
+                self.assertEqual(values["EnvironmentFile"], str(directory / ".env"))
+                self.assertEqual(values["ExecStart"],
+                                 '"' + str(directory / "bin/zxy-panel-api-linux-amd64") + '"')
+
+    def test_fast_api_unit_passes_real_systemd_validation(self):
+        for directory in (self.app, self.root / "app with spaces"):
+            with self.subTest(directory=directory.name):
+                result = self.verify_fast_api_unit(directory)
+                self.assert_systemd_valid(result)
+
+    def test_real_systemd_rejects_quoted_working_directory(self):
+        result = self.verify_fast_api_unit(self.app, quoted_directory=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WorkingDirectory", result.stderr)
+
+    def test_fast_agent_unit_preserves_absolute_environment_file(self):
+        for directory in (self.config, self.root / "config with spaces"):
+            with self.subTest(directory=directory.name):
+                content = self.render_fast_agent_unit(directory)
+                values = dict(line.split("=", 1) for line in content.splitlines() if "=" in line)
+                self.assertEqual(values["EnvironmentFile"], str(directory / "agent.env"))
+                self.assertEqual(values["ExecStart"], "/usr/local/bin/zxy-agent")
+
+    def test_fast_agent_unit_passes_real_systemd_validation(self):
+        for directory in (self.config, self.root / "config with spaces"):
+            with self.subTest(directory=directory.name):
+                self.assert_systemd_valid(self.verify_fast_agent_unit(directory))
+
+    def test_real_systemd_warns_for_quoted_api_environment_file(self):
+        result = self.verify_fast_api_unit(self.app, quoted_environment=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("EnvironmentFile= path is not absolute, ignoring:", result.stderr)
+        with self.assertRaises(AssertionError):
+            self.assert_systemd_valid(result)
+
+    def test_real_systemd_warns_for_quoted_agent_environment_file(self):
+        result = self.verify_fast_agent_unit(self.config, quoted_environment=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("EnvironmentFile= path is not absolute, ignoring:", result.stderr)
+        with self.assertRaises(AssertionError):
+            self.assert_systemd_valid(result)
 
     def docker_fixture(self):
         payloads = {}
@@ -421,6 +543,90 @@ docker() {
         self.ok("agent", "preflight_agent")
         dropin.write_text(dropin.read_text().replace("xray/config.json", "foreign/config.json"))
         self.bad("agent", "preflight_agent")
+
+    def managed_xray_with_stock_dropin(self):
+        self.agent_file()
+        self.agent_unit()
+        (self.root / "xray-base.service").write_text("[Service]\n")
+        binary = self.bin / "xray"
+        binary.write_text("#!/usr/bin/env bash\nexit 99\n")
+        binary.chmod(0o755)
+        panel = self.root / "xray-dropin.conf"
+        panel.write_text('[Service]\nUser=root\nGroup=root\nExecStart=\nExecStart="' + str(binary) +
+                         '" run -config "' + str(self.config / "xray/config.json") + '"\n')
+        stock = self.root / "10-donot_touch_single_conf.conf"
+        stock.write_text('# Official single-config default\n[Service]\nExecStart=\nExecStart=' +
+                         str(binary) + ' run -config /usr/local/etc/xray/config.json\n')
+        overrides = {"xray": {"DropInPaths": str(stock) + " " + str(panel)}}
+        (self.root / "unit-overrides.json").write_text(json.dumps(overrides))
+        return stock, panel, overrides
+
+    def test_managed_xray_official_single_config_pair_is_owned(self):
+        self.managed_xray_with_stock_dropin()
+        before = self.snapshot()
+        self.ok("agent", "preflight_agent")
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.trace.read_text(), "")
+
+    def test_managed_xray_unknown_dropin_or_wrong_order_is_refused(self):
+        stock, panel, overrides = self.managed_xray_with_stock_dropin()
+        for paths in (str(stock) + " " + str(panel) + " " + str(self.root / "custom.conf"),
+                      str(panel) + " " + str(stock), str(stock), str(panel) + " " + str(panel)):
+            with self.subTest(paths=paths):
+                overrides["xray"]["DropInPaths"] = paths
+                (self.root / "unit-overrides.json").write_text(json.dumps(overrides))
+                before = self.snapshot()
+                self.bad("agent", "preflight_agent")
+                self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.trace.read_text(), "")
+
+    def test_managed_xray_stock_full_content_is_validated(self):
+        stock, panel, _ = self.managed_xray_with_stock_dropin()
+        original = stock.read_text()
+        for text in (original + "Environment=UNTRUSTED=1\n", original + "[Unit]\nDescription=foreign\n",
+                     original.replace('/usr/local/etc/xray/config.json', '/foreign/config.json'),
+                     original.replace(' run -config ', ' run -confdir '),
+                     original + "ExecStartPost=/bin/true\n", original.replace('ExecStart=\n', ''),
+                     original.replace(str(self.bin / 'xray'), '/foreign/xray'),
+                     original + "invalid directive\n"):
+            with self.subTest(text=text):
+                stock.write_text(text)
+                before = self.snapshot()
+                self.bad("agent", "preflight_agent")
+                self.assertEqual(before, self.snapshot())
+        stock.write_text(original)
+        panel.write_text(panel.read_text() + 'Environment=UNTRUSTED=1\n')
+        self.bad("agent", "preflight_agent")
+        self.assertEqual(self.trace.read_text(), "")
+
+    def test_managed_xray_pair_effective_command_and_agent_link_are_required(self):
+        _, _, overrides = self.managed_xray_with_stock_dropin()
+        for key, value in (("ExecStart", "{ path=/foreign/xray ; argv[]=/foreign/xray run ; }"),
+                           ("User", "nobody"), ("Group", "nogroup"), ("LoadState", "masked")):
+            with self.subTest(key=key):
+                overrides["xray"][key] = value
+                (self.root / "unit-overrides.json").write_text(json.dumps(overrides))
+                self.bad("agent", "preflight_agent")
+                del overrides["xray"][key]
+        (self.root / "unit-overrides.json").write_text(json.dumps(overrides))
+        env = self.config / "agent.env"
+        env.write_text(env.read_text().replace('xray/config.json', 'foreign/config.json'))
+        self.bad("agent", "preflight_agent")
+        self.assertEqual(self.trace.read_text(), "")
+
+    def test_managed_xray_symlink_dropins_are_refused(self):
+        stock, panel, _ = self.managed_xray_with_stock_dropin()
+        for path in (stock, panel):
+            with self.subTest(path=path.name):
+                text = path.read_text()
+                target = self.root / (path.name + '.target')
+                target.write_text(text)
+                path.unlink()
+                path.symlink_to(target)
+                self.bad("agent", "preflight_agent")
+                path.unlink()
+                path.write_text(text)
+        self.assertEqual(self.trace.read_text(), "")
 
     def test_cli_declared_docker_is_not_overridden_by_stale_unit(self):
         self.info("docker")

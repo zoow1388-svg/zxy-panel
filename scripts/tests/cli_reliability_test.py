@@ -1099,6 +1099,178 @@ systemctl() {
         self.assertIn("ambiguous",result.stderr)
         self.assertEqual(self.snapshot(backups=True),before)
 
+    def restore_xray_setup(self, stock=True, fault=""):
+        setup = self.restore_setup(fault).replace("systemctl() {", "base_systemctl() {", 1)
+        config = self.config / "xray/config.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{"inbounds":[],"outbounds":[]}')
+        (self.config / "agent.env").write_text(
+            "ZXY_SERVER_ID=synthetic-server\nZXY_AGENT_TOKEN=synthetic-token\nZXY_XRAY_CONFIG=" + str(config) + "\n")
+        self.data.write_text(json.dumps(dict(servers={"synthetic-server": {
+            "id": "synthetic-server", "agent_token": "synthetic-token"}}, clients={}, logs=["synthetic-old-log"])))
+        (self.system / "BBR_CONF_FILE").write_text("net.ipv4.tcp_congestion_control=bbr\n")
+        binary = self.bin / "xray"
+        binary.write_text('#!/usr/bin/env bash\nprintf "forbidden-xray-execution\\n" >> "$TRACE"\nexit 99\n')
+        binary.chmod(0o755)
+        agent = self.system / "AGENT_UNIT_FILE"
+        agent.write_text('[Service]\nType=simple\nEnvironmentFile=' + str(self.config / "agent.env") +
+                         '\nExecStart=/usr/local/bin/zxy-agent\nRestart=always\nRestartSec=5\nLimitNOFILE=1048576\n')
+        fragment = self.system / "xray.service"
+        fragment.write_text("[Service]\n")
+        panel = self.system / "XRAY_DROPIN_FILE"
+        panel.write_text('[Service]\nUser=root\nGroup=root\nExecStart=\nExecStart="' + str(binary) +
+                         '" run -config "' + str(config) + '"\n')
+        official = panel.parent / "10-donot_touch_single_conf.conf"
+        official.write_text('# Official single-config default\n[Service]\nExecStart=\nExecStart=' +
+                            str(binary) + ' run -config /usr/local/etc/xray/config.json\n')
+        common = dict(LoadState="loaded", StartLimitAction="none", FailureAction="none", SuccessAction="none",
+                      OnFailure="", OnSuccess="", ExecStartPre="", ExecStartPost="", ExecStop="", ExecStopPost="", ExecReload="",
+                      UnsetEnvironment="")
+        values = {"zxy-agent": dict(common, FragmentPath=str(agent), DropInPaths="",
+            EnvironmentFiles=str(self.config / "agent.env") + " (ignore_errors=no)", WorkingDirectory="",
+            ExecStart="{ path=/usr/local/bin/zxy-agent ; argv[]=/usr/local/bin/zxy-agent ; }")}
+        values["xray"] = dict(common, FragmentPath=str(fragment),
+            DropInPaths=(str(official) + " " if stock else "") + str(panel), User="root", Group="root",
+            ExecStart="{ path=" + str(binary) + " ; argv[]=" + str(binary) + " run -config " + str(config) + " ; }")
+        (self.system / "xray-observations.json").write_text(json.dumps(values))
+        setup += r'''
+systemctl() {
+  if [[ "$1" == show && ( "$2" == zxy-agent || "$2" == xray ) ]]; then
+    printf 'systemctl %s\n' "$*" >> "$TRACE"
+    python3 - "$LAB/system/xray-observations.json" "$2" "$4" <<'PY_OBSERVE'
+import json, sys
+values = json.load(open(sys.argv[1]))
+print(values[sys.argv[2]][sys.argv[3]])
+PY_OBSERVE
+    return
+  fi
+  base_systemctl "$@"
+}
+'''
+        return setup, official, panel, values
+
+    def assert_xray_restore_rejected(self, setup, archive):
+        before = self.snapshot()
+        chosen = archive.read_bytes(), archive.stat().st_mtime_ns
+        count = len(list((self.app / "backups").glob("*.tar.gz")))
+        self.trace.write_text("")
+        result = self.shell("restore_backup " + shlex.quote(str(archive)), setup)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("restore completed", result.stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((archive.read_bytes(), archive.stat().st_mtime_ns), chosen)
+        self.assertEqual(len(list((self.app / "backups").glob("*.tar.gz"))), count)
+        trace = self.trace.read_text()
+        self.assertNotIn("systemctl stop", trace)
+        self.assertNotIn("systemctl start", trace)
+        self.assertNotIn("forbidden-xray-execution", trace)
+        self.assertNotIn("synthetic-token", result.stdout + result.stderr)
+
+    def test_restore_xray_official_pair_succeeds_without_program_or_unit_changes(self):
+        setup, _, _, _ = self.restore_xray_setup()
+        archive = self.backup()
+        old = self.data.read_bytes()
+        chosen = archive.read_bytes(), archive.stat().st_mtime_ns
+        self.data.write_text(json.dumps(dict(servers={"synthetic-server": {
+            "id": "synthetic-server", "agent_token": "synthetic-token"}}, clients={"new": "synthetic"}, logs=["new-log"])))
+        before = self.snapshot()
+        result = self.shell("restore_backup " + shlex.quote(str(archive)), setup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Configuration/data restore completed", result.stdout)
+        self.assertEqual(self.data.read_bytes(), old)
+        self.assertEqual((archive.read_bytes(), archive.stat().st_mtime_ns), chosen)
+        after = self.snapshot()
+        for key in before:
+            if key not in ("app/data/zxy-panel.json", "app/.env", "config/panel.info", "config/agent.env", "config/xray/config.json"):
+                self.assertEqual(after[key], before[key], key)
+        self.assertEqual(len(list((self.app / "backups").glob("*.tar.gz"))), 2)
+        trace = self.trace.read_text()
+        for unit in ("zxy-panel-api", "zxy-agent", "xray"):
+            self.assertEqual(trace.count("systemctl stop " + unit + "\n"), 1)
+            self.assertEqual(trace.count("systemctl start " + unit + "\n"), 1)
+        self.assertLess(trace.index("systemctl stop"), trace.index("systemctl start"))
+        self.assertIn("/fixturebase/api/health", trace)
+        for forbidden in ("daemon-reload", "reload nginx", "forbidden-xray-execution"):
+            self.assertNotIn(forbidden, trace)
+
+    def test_restore_xray_panel_only_remains_supported(self):
+        setup, _, _, _ = self.restore_xray_setup(stock=False)
+        archive = self.backup()
+        result = self.shell("restore_backup " + shlex.quote(str(archive)), setup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Configuration/data restore completed", result.stdout)
+
+    def test_restore_xray_unknown_duplicate_or_reordered_dropins_are_refused(self):
+        setup, official, panel, values = self.restore_xray_setup()
+        archive = self.backup()
+        for paths in (str(official) + " " + str(panel) + " " + str(self.system / "foreign.conf"),
+                      str(panel) + " " + str(official), str(official), str(panel) + " " + str(panel)):
+            with self.subTest(paths=paths):
+                values["xray"]["DropInPaths"] = paths
+                (self.system / "xray-observations.json").write_text(json.dumps(values))
+                self.assert_xray_restore_rejected(setup, archive)
+
+    def test_restore_xray_complete_dropin_contents_are_required(self):
+        setup, official, panel, _ = self.restore_xray_setup()
+        archive = self.backup()
+        stock_text, panel_text = official.read_text(), panel.read_text()
+        for text in (stock_text + "Environment=UNTRUSTED=1\n", stock_text + "[Unit]\nDescription=foreign\n",
+                     stock_text.replace('/usr/local/etc/xray/config.json', '/foreign/config.json'),
+                     stock_text.replace(' run -config ', ' run -confdir '), stock_text.replace('ExecStart=\n', ''),
+                     stock_text.replace(str(self.bin / 'xray'), '/foreign/xray'), stock_text + 'invalid directive\n'):
+            with self.subTest(stock=text):
+                official.write_text(text)
+                self.assert_xray_restore_rejected(setup, archive)
+        official.write_text(stock_text)
+        for text in (panel_text + 'ExecStartPost=/bin/true\n', panel_text + 'Environment=UNTRUSTED=1\n',
+                     panel_text.replace('User=root', 'User=nobody'), panel_text.replace('xray/config.json', 'foreign/config.json')):
+            with self.subTest(panel=text):
+                panel.write_text(text)
+                self.assert_xray_restore_rejected(setup, archive)
+
+    def test_restore_xray_effective_identity_commands_and_hooks_are_required(self):
+        setup, _, _, values = self.restore_xray_setup()
+        archive = self.backup()
+        cases = (("xray", "User", "nobody"), ("xray", "Group", "nogroup"), ("xray", "LoadState", "masked"),
+                 ("xray", "ExecStart", "{ path=/foreign/xray ; argv[]=/foreign/xray run ; }"),
+                 ("xray", "ExecStartPost", "/bin/true"), ("xray", "FailureAction", "poweroff"),
+                 ("zxy-agent", "EnvironmentFiles", "/foreign/agent.env (ignore_errors=no)"))
+        for unit, key, value in cases:
+            with self.subTest(unit=unit, key=key):
+                previous = values[unit][key]
+                values[unit][key] = value
+                (self.system / "xray-observations.json").write_text(json.dumps(values))
+                self.assert_xray_restore_rejected(setup, archive)
+                values[unit][key] = previous
+
+    def test_restore_xray_symlink_dropins_are_refused(self):
+        setup, official, panel, _ = self.restore_xray_setup()
+        archive = self.backup()
+        for path in (official, panel):
+            with self.subTest(path=path.name):
+                payload = path.read_bytes()
+                target = self.system / (path.name + '.target')
+                target.write_bytes(payload)
+                path.unlink()
+                path.symlink_to(target)
+                self.assert_xray_restore_rejected(setup, archive)
+                path.unlink()
+                path.write_bytes(payload)
+
+    def test_restore_xray_pair_apply_failure_recovers_all_protected_files(self):
+        setup, _, _, _ = self.restore_xray_setup()
+        archive = self.backup()
+        self.data.write_text(json.dumps(dict(servers={"synthetic-server": {
+            "id": "synthetic-server", "agent_token": "synthetic-token"}}, clients={"retained": "synthetic"}, logs=["retained-log"])))
+        before = self.snapshot()
+        chosen = archive.read_bytes(), archive.stat().st_mtime_ns
+        result = self.shell("restore_backup " + shlex.quote(str(archive)), setup + self.restore_fault())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("restore completed", result.stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((archive.read_bytes(), archive.stat().st_mtime_ns), chosen)
+        self.assertIn("Actual runtime mode", result.stderr)
+
     def test_restore_fast_actual_environment_unset_and_host_actions_rejected_before_stop(self):
         for fault in ("unset","host-action","process-environment"):
             with self.subTest(fault=fault):

@@ -15,26 +15,48 @@ type AdminUser struct {
 }
 
 type Server struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	IP              string    `json:"ip"`
-	Host            string    `json:"host"`
-	Region          string    `json:"region"`
-	Provider        string    `json:"provider"`
-	Status          string    `json:"status"`
-	AgentToken      string    `json:"agent_token"`
-	AgentVersion    string    `json:"agent_version"`
-	XrayVersion     string    `json:"xray_version"`
-	ConfigHash      string    `json:"config_hash"`
-	LastSyncAt      time.Time `json:"last_sync_at"`
-	LastSyncMessage string    `json:"last_sync_message"`
-	CPUUsage        float64   `json:"cpu_usage"`
-	MemoryUsage     float64   `json:"memory_usage"`
-	DiskUsage       float64   `json:"disk_usage"`
-	UploadTotal     int64     `json:"upload_total"`
-	DownloadTotal   int64     `json:"download_total"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string             `json:"id"`
+	Name             string             `json:"name"`
+	IP               string             `json:"ip"`
+	Host             string             `json:"host"`
+	Region           string             `json:"region"`
+	Provider         string             `json:"provider"`
+	Status           string             `json:"status"`
+	AgentToken       string             `json:"agent_token"`
+	AgentVersion     string             `json:"agent_version"`
+	XrayVersion      string             `json:"xray_version"`
+	ConfigHash       string             `json:"config_hash"`
+	LastSyncAt       time.Time          `json:"last_sync_at"`
+	LastSyncMessage  string             `json:"last_sync_message"`
+	CPUUsage         float64            `json:"cpu_usage"`
+	MemoryUsage      float64            `json:"memory_usage"`
+	DiskUsage        float64            `json:"disk_usage"`
+	UploadTotal      int64              `json:"upload_total"`
+	DownloadTotal    int64              `json:"download_total"`
+	BBRStatus        BBRStatus          `json:"bbr_status"`
+	BBRPendingAction *AgentSystemAction `json:"bbr_pending_action,omitempty"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+}
+
+type BBRStatus struct {
+	Kernel                     string    `json:"kernel"`
+	Supported                  bool      `json:"supported"`
+	Enabled                    bool      `json:"enabled"`
+	CongestionControl          string    `json:"congestion_control"`
+	DefaultQdisc               string    `json:"default_qdisc"`
+	AvailableCongestionControl []string  `json:"available_congestion_control"`
+	ModuleLoaded               bool      `json:"module_loaded"`
+	Message                    string    `json:"message"`
+	Error                      string    `json:"error,omitempty"`
+	CheckedAt                  time.Time `json:"checked_at"`
+}
+
+type AgentSystemAction struct {
+	ID          string    `json:"id"`
+	Action      string    `json:"action"`
+	RequestedAt time.Time `json:"requested_at"`
+	RequestedBy string    `json:"requested_by"`
 }
 
 type Node struct {
@@ -162,17 +184,20 @@ type OperationLog struct {
 }
 
 type AgentHeartbeat struct {
-	ServerID      string  `json:"server_id"`
-	Hostname      string  `json:"hostname"`
-	AgentVersion  string  `json:"agent_version"`
-	XrayVersion   string  `json:"xray_version"`
-	ConfigHash    string  `json:"config_hash"`
-	LastMessage   string  `json:"last_message"`
-	CPUUsage      float64 `json:"cpu_usage"`
-	MemoryUsage   float64 `json:"memory_usage"`
-	DiskUsage     float64 `json:"disk_usage"`
-	UploadTotal   int64   `json:"upload_total"`
-	DownloadTotal int64   `json:"download_total"`
+	ServerID              string     `json:"server_id"`
+	Hostname              string     `json:"hostname"`
+	AgentVersion          string     `json:"agent_version"`
+	XrayVersion           string     `json:"xray_version"`
+	ConfigHash            string     `json:"config_hash"`
+	LastMessage           string     `json:"last_message"`
+	CPUUsage              float64    `json:"cpu_usage"`
+	MemoryUsage           float64    `json:"memory_usage"`
+	DiskUsage             float64    `json:"disk_usage"`
+	UploadTotal           int64      `json:"upload_total"`
+	DownloadTotal         int64      `json:"download_total"`
+	BBRStatus             *BBRStatus `json:"bbr_status,omitempty"`
+	CompletedActionID     string     `json:"completed_action_id,omitempty"`
+	CompletedActionResult string     `json:"completed_action_result,omitempty"`
 }
 
 type AgentSyncRequest struct {
@@ -182,13 +207,14 @@ type AgentSyncRequest struct {
 }
 
 type AgentSyncResponse struct {
-	OK                  bool           `json:"ok"`
-	ServerID            string         `json:"server_id"`
-	DesiredConfigHash   string         `json:"desired_config_hash"`
-	RestartRequired     bool           `json:"restart_required"`
-	XrayConfig          map[string]any `json:"xray_config"`
-	NextIntervalSeconds int            `json:"next_interval_seconds"`
-	Message             string         `json:"message"`
+	OK                  bool               `json:"ok"`
+	ServerID            string             `json:"server_id"`
+	DesiredConfigHash   string             `json:"desired_config_hash"`
+	RestartRequired     bool               `json:"restart_required"`
+	XrayConfig          map[string]any     `json:"xray_config"`
+	NextIntervalSeconds int                `json:"next_interval_seconds"`
+	Message             string             `json:"message"`
+	SystemAction        *AgentSystemAction `json:"system_action,omitempty"`
 }
 
 type PanelData struct {

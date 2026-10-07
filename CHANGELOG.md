@@ -1,5 +1,27 @@
 # Changelog
 
+## V0.7.8 stable-engineering (2026-10-07)
+
+- Use `VERSION` as the source version baseline and synchronize runtime version labels.
+- Distinguish the source development version from the latest published manifest.
+- Check source versions before building; check the release manifest and package SHA256 after building.
+- Preserve BBR and the existing core Xray/Reality chain; include the previously approved R1/R1.5 identity, reference, and persistence safety guards without adding InstallID or IdentityStatus.
+- Protect Node creation persistence and duplicate-port validation; report save failures without publishing uncommitted state.
+- Improve Node/Relay conflict errors, draft preservation, and submission-state handling.
+- Correct fast/systemd path directives and installation/restore Xray drop-in ownership checks.
+- Reuse the exact accepted ZIP and generated assets; this documentation/manifest closeout does not rebuild or alter the package.
+- Tester-provided Ubuntu 22.04 amd64 fast/systemd evidence passed installation, reinstallation, configuration/data restore, V0.7.7.5 manual and managed upgrades, existing-account/node/client/binding retention, connectivity, reboot recovery, and 300-second idle observation.
+- Scope the release manifest's minimum upgrade origin to 0.7.7.5; older origins are not rejected automatically by this metadata and remain unverified.
+- Known limitations: the BBR installation success message can be incorrect; reported network variability is unresolved; Debian 12, Docker, and full-machine snapshot rollback were not accepted in this round.
+- Use the formal v0.7.8 release URL after verifying the uploaded original ZIP; retain the test pre-release and all historical evidence. Historical entries below are unchanged.
+
+## V0.7.7.6 bbr-optimization (unreleased)
+
+- Add host-level BBR detection, enable, and disable controls through the systemd Agent.
+- Enable BBR by default after installation when the kernel supports it; failures do not interrupt installation.
+- Preserve an administrator disable choice across later upgrades.
+- Add the Server Optimization page and BBR status reporting for local and remote Agents.
+
 ## V0.7.7.5 stability-polish
 
 - 统一 README、CHANGELOG、构建脚本、前端文案、后端版本、Agent 版本和安装脚本版本，减少发布包与远程 manifest 不一致问题。

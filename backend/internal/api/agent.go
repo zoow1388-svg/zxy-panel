@@ -2,6 +2,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -20,11 +21,11 @@ func (r *Router) agentHeartbeat(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if !r.validateAgentToken(w, req, body.ServerID) {
-		return
-	}
 	r.store.Mu.Lock()
 	defer r.store.Mu.Unlock()
+	if !r.validateAgentTokenLocked(w, req, body.ServerID) {
+		return
+	}
 	s := r.store.Data.Servers[body.ServerID]
 	s.Status = "online"
 	s.AgentVersion = body.AgentVersion
@@ -36,9 +37,22 @@ func (r *Router) agentHeartbeat(w http.ResponseWriter, req *http.Request) {
 	s.DiskUsage = body.DiskUsage
 	s.UploadTotal = body.UploadTotal
 	s.DownloadTotal = body.DownloadTotal
+	if body.BBRStatus != nil {
+		body.BBRStatus.CheckedAt = time.Now()
+		s.BBRStatus = *body.BBRStatus
+	}
+	logActor, logAction, logDetail := "", "", ""
+	if body.CompletedActionID != "" && s.BBRPendingAction != nil && s.BBRPendingAction.ID == body.CompletedActionID {
+		action := s.BBRPendingAction.Action
+		s.BBRPendingAction = nil
+		logActor, logAction, logDetail = "agent:"+body.ServerID, "bbr."+action+".complete", body.CompletedActionResult
+	}
 	s.UpdatedAt = time.Now()
-	r.store.Data.Servers[s.ID] = s
-	_ = r.store.SaveLocked()
+	if err := r.store.SaveServerLocked(body.ServerID, s, logActor, logAction, req.RemoteAddr, logDetail); err != nil {
+		log.Printf("failed to persist agent heartbeat: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save agent heartbeat"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "next_interval_seconds": 30})
 }
 
@@ -52,16 +66,12 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if !r.validateAgentToken(w, req, body.ServerID) {
-		return
-	}
 	r.store.Mu.Lock()
 	defer r.store.Mu.Unlock()
-	server, ok := r.store.Data.Servers[body.ServerID]
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not registered"})
+	if !r.validateAgentTokenLocked(w, req, body.ServerID) {
 		return
 	}
+	server := r.store.Data.Servers[body.ServerID]
 	nodes := make([]model.Node, 0)
 	for _, n := range r.store.Data.Nodes {
 		if n.ServerID == body.ServerID && n.Enabled {
@@ -104,8 +114,11 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 	server.LastSyncAt = time.Now()
 	server.LastSyncMessage = "agent sync requested"
 	server.UpdatedAt = time.Now()
-	r.store.Data.Servers[server.ID] = server
-	_ = r.store.SaveLocked()
+	if err := r.store.SaveServerLocked(body.ServerID, server, "", "", "", ""); err != nil {
+		log.Printf("failed to persist agent sync: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save agent sync"})
+		return
+	}
 	writeJSON(w, http.StatusOK, model.AgentSyncResponse{
 		OK:                  true,
 		ServerID:            body.ServerID,
@@ -114,10 +127,12 @@ func (r *Router) agentSync(w http.ResponseWriter, req *http.Request) {
 		XrayConfig:          cfg,
 		NextIntervalSeconds: 30,
 		Message:             "config generated",
+		SystemAction:        server.BBRPendingAction,
 	})
 }
 
-func (r *Router) validateAgentToken(w http.ResponseWriter, req *http.Request, serverID string) bool {
+// Caller must hold the store lock through authentication and any mutation.
+func (r *Router) validateAgentTokenLocked(w http.ResponseWriter, req *http.Request, serverID string) bool {
 	if serverID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing server_id"})
 		return false
@@ -127,15 +142,17 @@ func (r *Router) validateAgentToken(w http.ResponseWriter, req *http.Request, se
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing agent token"})
 		return false
 	}
-	r.store.Mu.RLock()
 	s, ok := r.store.Data.Servers[serverID]
-	r.store.Mu.RUnlock()
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server not registered"})
 		return false
 	}
 	if token != s.AgentToken {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid agent token"})
+		return false
+	}
+	if s.ID != serverID {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "server identity is inconsistent"})
 		return false
 	}
 	return true

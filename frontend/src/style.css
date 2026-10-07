@@ -630,3 +630,20 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover { opacity:
 /* V0.7.5.9.1 QR import compatibility */
 .qr-actions { margin-top: 10px; justify-content: center; flex-wrap: wrap; }
 .qr-box a.btn, .qr-zoom-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+
+/* V0.7.7.6 BBR server optimization */
+.bbr-server-card { margin-top: 14px; }
+.bbr-card-head { align-items: flex-start; gap: 16px; }
+.bbr-card-head h2 { margin: 0 0 6px; }
+.bbr-state { white-space: nowrap; }
+.bbr-state.ok { background: rgba(34,197,94,.12); color: #86efac; border-color: rgba(34,197,94,.28); }
+.bbr-state.warn { background: rgba(245,158,11,.12); color: #fcd34d; border-color: rgba(245,158,11,.28); }
+.bbr-state.muted { background: rgba(148,163,184,.12); color: #cbd5e1; border-color: rgba(148,163,184,.22); }
+.bbr-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin: 16px 0; }
+.bbr-status-grid > div { min-width: 0; padding: 13px; border: 1px solid #252b36; border-radius: 8px; background: #101622; display: grid; gap: 6px; }
+.bbr-status-grid span { color: #94a3b8; font-size: 12px; font-weight: 700; }
+.bbr-status-grid strong { color: #e5e7eb; overflow-wrap: anywhere; }
+.bbr-pending { margin: 0 0 12px; }
+.bbr-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+@media (max-width: 900px) { .bbr-status-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (max-width: 620px) { .bbr-status-grid { grid-template-columns: 1fr; } .bbr-card-head { flex-direction: column; } }

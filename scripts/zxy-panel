@@ -1,15 +1,183 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG_DIR="/etc/zxy-panel"
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  CONFIG_DIR="${CONFIG_DIR:-/etc/zxy-panel}"
+else
+  CONFIG_DIR="/etc/zxy-panel"
+fi
 PANEL_INFO="${CONFIG_DIR}/panel.info"
 APP_DIR="/opt/zxy-panel"
+HOST_NGINX_FILE=/etc/nginx/conf.d/zxy-panel.conf
+API_UNIT_FILE=/etc/systemd/system/zxy-panel-api.service
+AGENT_UNIT_FILE=/etc/systemd/system/zxy-agent.service
+XRAY_DROPIN_FILE=/etc/systemd/system/xray.service.d/99-zxy-panel.conf
+BBR_CONF_FILE=/etc/sysctl.d/99-zxy-bbr.conf
+BBR_DISABLED_FILE=/etc/zxy-panel/bbr.disabled
+PROC_DIRECTORY=/proc
 
 get_info() {
   local key="$1"
   if [[ -f "$PANEL_INFO" ]]; then
     grep -E "^${key}=" "$PANEL_INFO" | head -n1 | cut -d= -f2- || true
   fi
+}
+
+APP_DIR="$(get_info INSTALL_DIR)"
+APP_DIR="${APP_DIR:-/opt/zxy-panel}"
+
+env_file_value() {
+  local file="${2:-$APP_DIR/.env}" consumer
+  if [[ $# -ge 4 ]]; then consumer="$4"
+  else
+    consumer=$(install_mode) || return
+    [[ "$file" != "$CONFIG_DIR/agent.env" ]] || consumer=fast
+  fi
+  case "$consumer" in fast|docker) ;; *) return 1 ;; esac
+  python3 - "$file" "$1" "$consumer" "${3:-value}" <<'PY_ENV'
+import os, re, sys
+from pathlib import Path
+path, key, consumer, query = sys.argv[1:]
+values = {}
+
+def interpolate(value):
+    def replace(match):
+        if match[0] == '$$': return '$'
+        expression = match[1] if match[1] is not None else match[2]
+        parts = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-+?])(.*))?', expression)
+        if not parts or '$' in (parts[3] or ''): raise ValueError()
+        name, operator, argument = parts[1], parts[2], parts[3] or ''
+        current = os.environ.get(name, values.get(name))
+        exists = current is not None and (':' not in (operator or '') or current != '')
+        if operator and operator.endswith('?') and not exists: raise ValueError()
+        if operator and operator.endswith('-'): return current if exists else argument
+        if operator and operator.endswith('+'): return argument if exists else ''
+        return current or ''
+    return re.sub(r'\$\$|\$\{([^}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)', replace, value)
+
+def decode(raw):
+    value = raw.strip()
+    if value.startswith("'"):
+        if not value.endswith("'"): raise ValueError()
+        value = value[1:-1]
+        if consumer == 'docker': return value.replace("\\'", "'")
+        if "'" in value: raise ValueError()
+        return value
+    if value.startswith('"'):
+        if not value.endswith('"'): raise ValueError()
+        value = value[1:-1]
+        escapes = {'\\': '\\', '"': '"', '$': '$', '`': '`'}
+        if consumer == 'docker': escapes.update({'n': '\n', 'r': '\r', 't': '\t'})
+        value = re.sub(r'\\(.)', lambda m: escapes.get(m[1], '\\' + m[1]), value)
+        return interpolate(value) if consumer == 'docker' else value
+    if consumer == 'docker':
+        value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
+        return interpolate(value)
+    trailing = re.search(r'\\+$', value)
+    if trailing and len(trailing[0]) % 2: raise ValueError()
+    return re.sub(r'\\(.)', lambda m: m[1], value)
+
+try:
+    p = Path(path)
+    if p.is_symlink() or (p.exists() and not p.is_file()): raise ValueError()
+    if p.exists():
+        for line in p.read_text(encoding='utf-8').splitlines():
+            if not line.strip() or line.lstrip().startswith('#'): continue
+            match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)=(.*)', line)
+            if not match or match[1] in values: raise ValueError()
+            value = decode(match[2])
+            if any(c in value for c in '\x00\r\n'): raise ValueError()
+            values[match[1]] = value
+    print(('present' if key in values else '') if query == 'present' else values.get(key, ''), end='')
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('ERROR: operational environment is invalid; no action taken.')
+PY_ENV
+}
+
+health_check() {
+  local response
+  [[ -n "$2" ]] || { echo 'ERROR: expected API version is unknown.' >&2; return 1; }
+  response=$(curl -fsS --connect-timeout 2 --max-time 4 --max-filesize 65536 "$1") || return
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin)
+    valid = isinstance(value, dict) and value.get("status") == "ok"
+    valid = valid and value.get("service") == "zxy-panel-api" and value.get("version") == sys.argv[1]
+    if not valid: raise ValueError()
+except (ValueError, TypeError):
+    raise SystemExit("ERROR: API health JSON or target version is not confirmed.")
+' "$2"
+}
+
+generate_upgrade_command() {
+  python3 - "$1" "$2" "$APP_DIR" "$CONFIG_DIR" <<'PY_UPDATE_COMMAND'
+import json, re, shlex, sys
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+try:
+    path = Path(sys.argv[1])
+    if path.stat().st_size > 262144: raise ValueError()
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict): raise ValueError()
+    version, latest, codename, package, url, sha = (data.get(k) for k in
+        ('version', 'latest', 'codename', 'package', 'download_url', 'sha256'))
+    if not all(isinstance(v, str) and v for v in (version, latest, codename, package, url, sha)): raise ValueError()
+    if not re.fullmatch(r'\d+(?:\.\d+)*', version): raise ValueError()
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', codename): raise ValueError()
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', latest) or not latest.startswith(version + '-'): raise ValueError()
+    if package != 'zxy-panel-v' + version + '-' + codename + '.zip': raise ValueError()
+    if not re.fullmatch(r'[0-9a-fA-F]{64}', sha): raise ValueError()
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment: raise ValueError()
+    if any(c.isspace() or ord(c) < 32 for c in url) or unquote(parsed.path).rsplit('/', 1)[-1] != package: raise ValueError()
+    def number(value):
+        match = re.match(r'^(\d+(?:\.\d+)*)(?:-|$)', value)
+        if not match: raise ValueError()
+        return tuple(map(int, match[1].split('.')))
+    current, target = number(sys.argv[2]), number(latest)
+    width = max(len(current), len(target))
+    if target + (0,) * (width - len(target)) <= current + (0,) * (width - len(current)):
+        print('Current version is latest; no downgrade command generated.')
+        raise SystemExit(0)
+    root = package[:-4]
+    guard = """
+import stat,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    seen=set()
+    for i in z.infolist():
+        p=i.filename
+        parts=p.rstrip('/').split('/')
+        if '\\\\' in p or not parts or parts[0]!=sys.argv[2] or any(v in ('','.','..') for v in parts) or p in seen:
+            raise SystemExit('ERROR: unsafe ZIP path')
+        seen.add(p)
+        kind=stat.S_IFMT(i.external_attr>>16)
+        if kind not in (0,stat.S_IFREG,stat.S_IFDIR): raise SystemExit('ERROR: unsafe ZIP member type')
+    if sys.argv[2]+'/deploy/install.sh' not in seen: raise SystemExit('ERROR: installer missing')
+    if z.testzip() is not None: raise SystemExit('ERROR: corrupt ZIP')
+""".strip()
+    script = '\n'.join((
+        'set -euo pipefail',
+        'mkdir -p /root/zxy-panel-upgrades',
+        'work=$(mktemp -d /root/zxy-panel-upgrades/job-XXXXXX)',
+        'cd "$work"',
+        'package=' + shlex.quote(package),
+        'curl --fail --location --silent --show-error -o "$package" ' + shlex.quote(url),
+        'printf \'%s  %s\\n\' ' + shlex.quote(sha.lower()) + ' "$package" | sha256sum -c -',
+        'python3 -c ' + shlex.quote(guard) + ' "$package" ' + shlex.quote(root),
+        'unzip -q "$package"',
+        'cd ' + shlex.quote(root),
+        'APP_DIR=' + shlex.quote(sys.argv[3]) + ' CONFIG_DIR=' + shlex.quote(sys.argv[4]) +
+        ' bash deploy/install.sh 2>&1 | tee /root/zxy-panel-upgrade.log',
+    ))
+    print('Latest:', latest)
+    print('Package:', package)
+    print('SHA256:', sha.lower())
+    print('Review and run this command; nothing has been installed by this helper:')
+    print('bash -c ' + shlex.quote(script))
+except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+    raise SystemExit('ERROR: invalid update manifest; no upgrade command generated.')
+PY_UPDATE_COMMAND
 }
 
 compose_cmd() {
@@ -22,14 +190,132 @@ compose_cmd() {
   fi
 }
 
+run_panel_compose() {
+  local engine key value raw project saved record name context
+  local -a command
+  engine=$(compose_cmd)
+  case "$engine" in
+    'docker compose') command=(docker compose) ;;
+    docker-compose) command=(docker-compose) ;;
+    *) echo 'ERROR: Docker Compose is unavailable.' >&2; return 1 ;;
+  esac
+  for key in DOCKER_HOST DOCKER_CONTEXT; do
+    value="${!key-}"
+    case "$key:$value" in DOCKER_HOST:|DOCKER_HOST:unix:///var/run/docker.sock|DOCKER_CONTEXT:|DOCKER_CONTEXT:default) ;;
+      *) echo 'ERROR: remote Docker context is outside this installation.' >&2; return 1 ;;
+    esac
+  done
+  context=$(docker context show) || { echo 'ERROR: cannot inspect Docker context.' >&2; return 1; }
+  [[ "$context" == default ]] || { echo 'ERROR: only the local default Docker context is supported.' >&2; return 1; }
+  saved=$(get_info COMPOSE_PROJECT)
+  project="$saved"
+  for name in zxy-panel-api zxy-panel-frontend; do
+    raw=$(docker inspect "$name" 2>/dev/null) || {
+      echo 'ERROR: existing Compose containers cannot be confirmed; no action taken.' >&2; return 1;
+    }
+    record=$(printf '%s' "$raw" | python3 -c '
+import json, re, sys
+try:
+    items = json.load(sys.stdin)
+    if not isinstance(items, list) or len(items) != 1: raise ValueError()
+    item = items[0]
+    labels = item.get("Config", {}).get("Labels") or {}
+    app, service = sys.argv[1:]
+    project = labels.get("com.docker.compose.project", "")
+    valid = isinstance(project, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project)
+    valid = valid and labels.get("com.docker.compose.service") == service
+    valid = valid and labels.get("com.docker.compose.project.working_dir") == app
+    valid = valid and labels.get("com.docker.compose.project.config_files") == app + "/docker-compose.yml"
+    if service == "zxy-panel-api":
+        valid = valid and any(m.get("Type") == "bind" and m.get("Source") == app + "/data" and m.get("Destination") == "/app/data" for m in item.get("Mounts", []))
+    if not valid: raise ValueError()
+    print(project)
+except (ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+' "$APP_DIR" "$name") || { echo 'ERROR: container ownership is ambiguous; no Compose action taken.' >&2; return 1; }
+    [[ -z "$project" || "$project" == "$record" ]] || { echo 'ERROR: Compose project conflict.' >&2; return 1; }
+    project="$record"
+  done
+  local scope
+  scope=$(python3 - "$APP_DIR/.env" <<'PY_COMPOSE_SCOPE'
+import re, sys
+from pathlib import Path
+try:
+    for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+        if not re.match(r'(COMPOSE_FILE|COMPOSE_PROJECT_NAME|DOCKER_HOST|DOCKER_CONTEXT)=', line): continue
+        key, value = line.split('=', 1)
+        value = value.strip()
+        if value.startswith(("'", '"')):
+            if not value.endswith(value[0]): raise ValueError()
+            value = value[1:-1]
+        if any(c in value for c in '\x00\r\n'): raise ValueError()
+        print(key + '=' + value)
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('ERROR: Compose scope cannot be read safely.')
+PY_COMPOSE_SCOPE
+  ) || return
+  local -a configured=()
+  while IFS= read -r record; do [[ -z "$record" ]] || configured+=("$record"); done <<< "$scope"
+  for key in COMPOSE_FILE COMPOSE_PROJECT_NAME DOCKER_HOST DOCKER_CONTEXT; do
+    configured+=("$key=${!key-}")
+  done
+  for record in "${configured[@]}"; do
+    key="${record%%=*}"; value="${record#*=}"
+    case "$key" in
+      COMPOSE_FILE) [[ -z "$value" || "$value" == "$APP_DIR/docker-compose.yml" ]] ;;
+      COMPOSE_PROJECT_NAME) [[ -z "$value" || "$value" == "$project" ]] ;;
+      DOCKER_HOST) [[ -z "$value" || "$value" == unix:///var/run/docker.sock ]] ;;
+      DOCKER_CONTEXT) [[ -z "$value" || "$value" == default ]] ;;
+    esac || { echo "ERROR: conflicting $key; no Compose action taken." >&2; return 1; }
+  done
+  COMPOSE_REMOVE_ORPHANS=false COMPOSE_IGNORE_ORPHANS=false COMPOSE_PROFILES='' \
+    "${command[@]}" -p "$project" -f "$APP_DIR/docker-compose.yml" \
+    --project-directory "$APP_DIR" --env-file "$APP_DIR/.env" "$@"
+}
+
 install_mode() {
-  get_info INSTALL_MODE || true
+  local mode directory execution environment fast=false docker=false raw
+  mode=$(get_info INSTALL_MODE)
+  case "$mode" in
+    fast|docker) printf '%s\n' "$mode"; return ;;
+    '') ;;
+    *) echo 'ERROR: invalid installation mode.' >&2; return 1 ;;
+  esac
+  directory=$(systemctl show zxy-panel-api -p WorkingDirectory --value 2>/dev/null || true)
+  execution=$(systemctl show zxy-panel-api -p ExecStart --value 2>/dev/null || true)
+  environment=$(systemctl show zxy-panel-api -p EnvironmentFiles --value 2>/dev/null || true)
+  if [[ "$directory" == "$APP_DIR" && "$environment" == "$APP_DIR/.env (ignore_errors=no)" ]] &&
+    [[ "$execution" == *"path=$APP_DIR/bin/zxy-panel-api-linux-amd64 ;"* || "$execution" == *"path=$APP_DIR/bin/zxy-panel-api ;"* ]]; then fast=true; fi
+  if command -v docker >/dev/null 2>&1; then
+    raw=$(docker inspect zxy-panel-api 2>/dev/null || true)
+    if [[ -n "$raw" ]] && printf '%s' "$raw" | python3 -c '
+import json, sys
+try:
+    items = json.load(sys.stdin)
+    if not isinstance(items, list) or len(items) != 1: raise ValueError()
+    item = items[0]
+    labels = item.get("Config", {}).get("Labels") or {}
+    app = sys.argv[1]
+    valid = labels.get("com.docker.compose.service") == "zxy-panel-api"
+    valid = valid and labels.get("com.docker.compose.project.working_dir") == app
+    valid = valid and labels.get("com.docker.compose.project.config_files") == app + "/docker-compose.yml"
+    valid = valid and bool(labels.get("com.docker.compose.project"))
+    valid = valid and any(m.get("Type") == "bind" and m.get("Source") == app + "/data" and m.get("Destination") == "/app/data" for m in item.get("Mounts", []))
+    raise SystemExit(0 if valid else 1)
+except (ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+' "$APP_DIR"; then docker=true; fi
+  fi
+  if [[ "$fast" == true && "$docker" == false ]]; then printf 'fast\n'
+  elif [[ "$docker" == true && "$fast" == false ]]; then printf 'docker\n'
+  else echo 'ERROR: installation mode cannot be confirmed; no service selected.' >&2; return 1
+  fi
 }
 
 restart_api() {
   local mode
-  mode="$(install_mode)"
-  if [[ "$mode" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+  mode="$(install_mode)" || return
+  if [[ "$mode" == "fast" ]]; then
     systemctl restart zxy-panel-api
     return
   fi
@@ -39,8 +325,8 @@ restart_api() {
     echo "docker compose not found"
     exit 1
   fi
-  cd "$APP_DIR"
-  $compose restart zxy-panel-api >/dev/null
+  cd "$APP_DIR" || return
+  run_panel_compose restart zxy-panel-api >/dev/null
 }
 
 status_line() {
@@ -51,6 +337,8 @@ status_line() {
     printf "[OK]   %s" "$label"
   elif [[ "$state" == "warn" ]]; then
     printf "[WARN] %s" "$label"
+  elif [[ "$state" == "info" ]]; then
+    printf "[INFO] %s" "$label"
   else
     printf "[FAIL] %s" "$label"
   fi
@@ -72,8 +360,8 @@ service_check() {
 
 recent_xray_restart_count() {
   local lines
-  lines=$(journalctl -u xray --since "3 minutes ago" --no-pager 2>/dev/null \
-    | grep -E "Stopping Xray|Stopped Xray|Started Xray Service|Reading config|Xray .* started" || true)
+  lines=$(journalctl -u xray --since "3 minutes ago" --no-pager 2>/dev/null) || return
+  lines=$(printf '%s\n' "$lines" | grep -E "Stopping Xray|Stopped Xray|Started Xray Service|Reading config|Xray .* started" || true)
   if [[ -z "$lines" ]]; then
     echo 0
     return 0
@@ -81,10 +369,124 @@ recent_xray_restart_count() {
   printf '%s\n' "$lines" | wc -l | tr -d ' '
 }
 
-
-backup_timestamp() {
-  date +%Y%m%d-%H%M%S
+operational_value() {
+  local value present consumer
+  if [[ $# -ge 3 ]]; then consumer="$3"; else consumer=$(install_mode) || return; fi
+  present=$(env_file_value "$1" "$APP_DIR/.env" present "$consumer") || return
+  if [[ "$present" == present ]]; then
+    value=$(env_file_value "$1" "$APP_DIR/.env" value "$consumer") || return
+    [[ -n "$value" ]] || { echo "ERROR: $1 is empty; no fallback used." >&2; return 1; }
+    printf '%s' "$value"
+  else printf '%s' "$2"
+  fi
 }
+
+configured_db_path() {
+  local mode path
+  mode="${1:-}"
+  [[ -n "$mode" ]] || mode=$(install_mode) || return
+  case "$mode" in fast|docker) ;; *) return 1 ;; esac
+  path=$(operational_value ZXY_DB_PATH "$APP_DIR/data/zxy-panel.json" "$mode") || return
+  if [[ "$mode" == docker ]]; then
+    [[ "$path" == "$APP_DIR/data/zxy-panel.json" || "$path" == /app/data/zxy-panel.json ]] || {
+      echo 'ERROR: external Docker DB mapping is not supported.' >&2; return 1;
+    }
+    path="$APP_DIR/data/zxy-panel.json"
+  fi
+  [[ "$path" == /* && "$path" != / && "$path" != *'/../'* && "$path" != */.. ]] || {
+    echo 'ERROR: database path is invalid.' >&2; return 1;
+  }
+  printf '%s' "$path"
+}
+
+load_operational_config() {
+  MODE=$(install_mode) || return
+  EXPECTED_VERSION=$(get_info VERSION)
+  [[ -f "$APP_DIR/VERSION" && ! -L "$APP_DIR/VERSION" ]] || { echo 'ERROR: installed VERSION is unavailable.' >&2; return 1; }
+  local source_version value
+  source_version=$(tr -d '\r\n' < "$APP_DIR/VERSION") || return
+  [[ -n "$EXPECTED_VERSION" && "$EXPECTED_VERSION" == "$source_version" ]] || {
+    echo 'ERROR: installed source and panel metadata versions disagree.' >&2; return 1;
+  }
+  API_PORT=$(operational_value API_PORT 8088) || return
+  WEB_PORT=$(operational_value WEB_PORT 5173) || return
+  PORT=$(get_info PORT)
+  WEB_BASE_PATH=$(get_info WEB_BASE_PATH)
+  for value in "$API_PORT" "$WEB_PORT" "$PORT"; do
+    [[ "$value" =~ ^[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )) || {
+      echo 'ERROR: operational port is invalid.' >&2; return 1;
+    }
+  done
+  [[ "$WEB_BASE_PATH" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'ERROR: WebBasePath is invalid.' >&2; return 1; }
+  DB_PATH=$(configured_db_path) || return
+  AUTO_AGENT=$(operational_value ZXY_AUTO_AGENT "$(get_info AUTO_AGENT)") || return
+  INSTALL_XRAY=$(operational_value ZXY_INSTALL_XRAY "$(get_info INSTALL_XRAY)") || return
+  SETUP_XRAY_SERVICE=$(operational_value ZXY_SETUP_XRAY_SERVICE "$(get_info SETUP_XRAY_SERVICE)") || return
+  for value in "$AUTO_AGENT" "$INSTALL_XRAY" "$SETUP_XRAY_SERVICE"; do
+    case "$value" in ''|true|false) ;; *) echo 'ERROR: optional component configuration is invalid.' >&2; return 1 ;; esac
+  done
+  XRAY_CONFIG=$(env_file_value ZXY_XRAY_CONFIG "$CONFIG_DIR/agent.env") || return
+  XRAY_CONFIG="${XRAY_CONFIG:-$CONFIG_DIR/xray/config.json}"
+}
+
+optional_service_check() {
+  local unit="$1" requested="$2" loaded
+  loaded=$(systemctl show "$unit" -p LoadState --value 2>/dev/null) || {
+    status_line "$unit" fail 'service observation unavailable'; return 1;
+  }
+  case "$loaded" in
+    loaded) service_check "$unit" ;;
+    not-found)
+      if [[ "$requested" == true ]]; then status_line "$unit" fail 'requested but missing'; return 1; fi
+      status_line "$unit" info 'not installed; optional component skipped' ;;
+    *) status_line "$unit" fail "service state is ${loaded:-unknown}"; return 1 ;;
+  esac
+}
+
+report_runtime_state() {
+  local mode unit state
+  mode=$(install_mode) || mode=unknown
+  printf 'Actual runtime mode: %s\n' "$mode" >&2
+  for unit in nginx zxy-panel-api zxy-agent xray; do
+    state=$(systemctl is-active "$unit" 2>/dev/null) || state="${state:-unknown}"
+    printf 'Actual %s state: %s\n' "$unit" "$state" >&2
+  done
+  if [[ "$mode" == docker ]]; then
+    docker inspect --format '{{.Name}}: {{.State.Status}}' zxy-panel-api zxy-panel-frontend >&2 || {
+      echo 'Actual container state: observation unavailable' >&2;
+    }
+  fi
+}
+
+restart_panel() {
+  load_operational_config || return
+  nginx -t || { report_runtime_state; return 1; }
+  if [[ "$MODE" == docker ]]; then
+    run_panel_compose restart zxy-panel-api zxy-panel-frontend || { report_runtime_state; return 1; }
+  elif ! restart_api; then report_runtime_state; return 1; fi
+  local loaded
+  loaded=$(systemctl show zxy-agent -p LoadState --value) || { report_runtime_state; return 1; }
+  if [[ "$loaded" == loaded ]]; then
+    systemctl restart zxy-agent || { report_runtime_state; return 1; }
+  elif [[ "$loaded" != not-found || "$AUTO_AGENT" == true ]]; then
+    echo 'ERROR: requested Agent cannot be restarted.' >&2; report_runtime_state; return 1
+  fi
+  systemctl restart nginx || { report_runtime_state; return 1; }
+  local attempt
+  for attempt in {1..30}; do
+    if health_check "http://127.0.0.1:$API_PORT/api/health" "$EXPECTED_VERSION" &&
+       health_check "http://127.0.0.1:$PORT/api/health" "$EXPECTED_VERSION" &&
+       health_check "http://127.0.0.1:$PORT/$WEB_BASE_PATH/api/health" "$EXPECTED_VERSION"; then
+      echo 'ZXY Panel restarted; API and Nginx health versions confirmed.'
+      return 0
+    fi
+    sleep 1
+  done
+  echo 'ERROR: restarted services did not recover the expected API version.' >&2
+  report_runtime_state
+  return 1
+}
+
 
 backup_dir() {
   echo "$APP_DIR/backups"
@@ -100,60 +502,108 @@ mask_secret() {
 }
 
 latest_backup_file() {
-  local dir
-  dir="$(backup_dir)"
-  find "$dir" -maxdepth 1 -type f -name 'zxy-panel-backup-*.tar.gz' 2>/dev/null | sort | tail -n1
+  python3 - "$(backup_dir)" <<'PY_LATEST_BACKUP'
+import stat,sys
+from pathlib import Path
+try:
+    directory=Path(sys.argv[1])
+    if any(p.is_symlink() for p in (directory,)+tuple(directory.parents)): raise ValueError()
+    candidates=[]
+    for path in directory.glob('zxy-panel-backup-*.tar.gz'):
+        record=path.lstat()
+        if stat.S_ISREG(record.st_mode): candidates.append((record.st_mtime_ns,str(path)))
+    if candidates:
+        latest=max(v[0] for v in candidates)
+        choices=[v[1] for v in candidates if v[0]==latest]
+        if len(choices)!=1: raise ValueError()
+        print(choices[0])
+except (OSError,ValueError):
+    raise SystemExit('ERROR: latest backup is unavailable or ambiguous; select an explicit trusted archive.')
+PY_LATEST_BACKUP
 }
 
 create_backup() {
   local reason="${1:-manual}"
-  local dir ts tmp root backup item copied=0
-  dir="$(backup_dir)"
-  ts="$(backup_timestamp)"
-  backup="$dir/zxy-panel-backup-${ts}.tar.gz"
-  mkdir -p "$dir"
-  tmp="$(mktemp -d)"
-  root="$tmp/root"
-  mkdir -p "$root"
-
-  cat > "$root/zxy-backup-meta.txt" <<EOF_META
-ZXY Panel backup
-created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-reason=${reason}
-source_host=$(hostname 2>/dev/null || echo unknown)
-version=$(get_info VERSION || true)
-install_mode=$(get_info INSTALL_MODE || true)
-EOF_META
-
-  local items=(
-    "$APP_DIR/data/zxy-panel.json"
-    "$APP_DIR/.env"
-    "$PANEL_INFO"
-    "/etc/zxy-panel/xray/config.json"
-    "/etc/nginx/conf.d/zxy-panel.conf"
-    "/etc/systemd/system/zxy-panel-api.service"
-    "/etc/systemd/system/zxy-agent.service"
-    "/etc/systemd/system/xray.service.d/99-zxy-panel.conf"
-  )
-
-  for item in "${items[@]}"; do
-    if [[ -e "$item" ]]; then
-      mkdir -p "$root$(dirname "$item")"
-      cp -a "$item" "$root$item"
-      copied=$((copied+1))
-    fi
-  done
-
-  if [[ "$copied" -eq 0 ]]; then
-    rm -rf "$tmp"
-    echo "No existing ZXY Panel files found, backup skipped."
-    return 0
-  fi
-
-  tar -C "$root" -czf "$backup" .
-  chmod 600 "$backup" 2>/dev/null || true
-  rm -rf "$tmp"
-  echo "$backup"
+  local db mode xray
+  mode="${2:-}"
+  [[ -n "$mode" ]] || mode=$(install_mode) || return
+  case "$mode" in fast|docker) ;; *) return 1 ;; esac
+  db=$(configured_db_path "$mode") || return
+  xray=$(env_file_value ZXY_XRAY_CONFIG "$CONFIG_DIR/agent.env" value fast) || return
+  xray="${xray:-$CONFIG_DIR/xray/config.json}"
+  python3 - "$APP_DIR" "$CONFIG_DIR" "$db" "$mode" "$(get_info VERSION)" "$reason" "$xray" \
+    "$HOST_NGINX_FILE" "$API_UNIT_FILE" "$AGENT_UNIT_FILE" "$XRAY_DROPIN_FILE" "$BBR_CONF_FILE" "$BBR_DISABLED_FILE" <<'PY_BACKUP'
+import datetime, hashlib, io, json, os, stat, sys, tarfile, tempfile, uuid
+from pathlib import Path
+app, config, db, mode, version, reason, xray, nginx, api_unit, agent_unit, dropin, bbr, disabled = sys.argv[1:]
+files = dict(database=db, environment=app+'/.env', panel_info=config+'/panel.info',
+    agent_environment=config+'/agent.env', xray_config=xray, nginx=nginx,
+    api_unit=api_unit, agent_unit=agent_unit, xray_dropin=dropin, bbr=bbr, bbr_disabled=disabled)
+directory = Path(app) / 'backups'
+temporary = None
+published = False
+try:
+    for root in (Path(app), Path(config), directory):
+        if not root.is_absolute() or any(p.is_symlink() for p in (root,) + tuple(root.parents)): raise ValueError()
+    directory.mkdir(parents=True, exist_ok=True)
+    payloads, records, missing, total = {}, {}, [], 0
+    for key, name in files.items():
+        path = Path(name)
+        if not path.is_absolute() or any(p.is_symlink() for p in (path,) + tuple(path.parents)): raise ValueError()
+        if not path.exists():
+            missing.append(key)
+            continue
+        if not path.is_file(): raise ValueError()
+        with os.fdopen(os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
+            before = os.fstat(f.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 268435456 or total + before.st_size > 536870912: raise ValueError()
+            payload = f.read(268435457)
+            after = os.fstat(f.fileno())
+        if len(payload) > 268435456 or any(getattr(before, k) != getattr(after, k) for k in
+            ('st_ino', 'st_dev', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid')): raise ValueError()
+        if key == 'database' and not isinstance(json.loads(payload.decode('utf-8')), dict): raise ValueError()
+        payloads[key] = payload
+        total += len(payload)
+        records[key] = dict(sha256=hashlib.sha256(payload).hexdigest(), size=len(payload),
+            mode=stat.S_IMODE(after.st_mode), mtime_ns=after.st_mtime_ns)
+    if not payloads: raise ValueError()
+    meta = dict(format='zxy-panel-config-data-v1', version=version, install_mode=mode,
+        install_dir=app, config_dir=config, database_path=db,
+        created_at=datetime.datetime.utcnow().isoformat()+'Z', reason=reason,
+        files=records, missing=missing)
+    with tempfile.NamedTemporaryFile(prefix='.zxy-backup-', suffix='.part', dir=str(directory), delete=False) as output:
+        temporary = output.name
+        os.chmod(temporary, 0o600)
+        with tarfile.open(fileobj=output, mode='w:gz') as archive:
+            for key, payload in [('manifest.json', json.dumps(meta, sort_keys=True).encode('utf-8'))] + [
+                ('files/'+key, payloads[key]) for key in sorted(payloads)]:
+                entry = tarfile.TarInfo(key)
+                entry.size, entry.mode = len(payload), 0o600
+                archive.addfile(entry, io.BytesIO(payload))
+        output.flush()
+        os.fsync(output.fileno())
+    stamp = datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    for attempt in range(8):
+        destination = directory / ('zxy-panel-backup-'+stamp+'-'+uuid.uuid4().hex+'.tar.gz')
+        try:
+            os.link(temporary, str(destination))
+            published = True
+            break
+        except FileExistsError: continue
+    if not published: raise ValueError()
+    os.unlink(temporary)
+    temporary = None
+    descriptor = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+    print(str(destination))
+except (OSError, ValueError, UnicodeError, tarfile.TarError):
+    raise SystemExit('ERROR: backup failed; no existing backup or source file was overwritten.')
+finally:
+    if temporary and os.path.exists(temporary):
+        try: os.unlink(temporary)
+        except OSError: print('WARNING: backup staging cleanup incomplete.', file=sys.stderr)
+PY_BACKUP
 }
 
 print_backup_list() {
@@ -178,31 +628,555 @@ print_backup_list() {
   done <<< "$files"
 }
 
-restore_backup() {
-  local backup="${1:-}"
-  if [[ -z "$backup" ]]; then
-    backup="$(latest_backup_file)"
-  fi
-  if [[ -z "$backup" || ! -f "$backup" ]]; then
-    echo "Backup file not found. Use: zxy-panel backup-list"
-    exit 1
-  fi
-  echo "Restoring backup: $backup"
-  echo "Creating safety backup before restore..."
-  create_backup "pre-restore" >/dev/null || true
-  tar -xzf "$backup" -C /
-  chmod 600 "$APP_DIR/.env" 2>/dev/null || true
-  chmod 600 "$PANEL_INFO" 2>/dev/null || true
-  chmod 600 /etc/zxy-panel/xray/config.json 2>/dev/null || true
-  systemctl daemon-reload || true
-  systemctl restart zxy-panel-api 2>/dev/null || true
-  systemctl restart zxy-agent 2>/dev/null || true
-  systemctl restart xray 2>/dev/null || true
-  systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
-  echo "Restore completed. Running doctor..."
-  zxy-panel doctor || true
+restore_files() {
+  python3 - "$1" "$2" "${3:-}" "$APP_DIR" "$CONFIG_DIR" "$DB_PATH" "$MODE" "$EXPECTED_VERSION" \
+    "$XRAY_CONFIG" "$BBR_CONF_FILE" "$BBR_DISABLED_FILE" <<'PY_RESTORE'
+import hashlib, json, os, stat, sys, tarfile, tempfile
+from pathlib import Path
+action, work, archive, app, config, db, mode, version, xray, bbr, disabled = sys.argv[1:]
+directory = Path(work)
+targets = dict(database=db, environment=app+'/.env', panel_info=config+'/panel.info',
+    agent_environment=config+'/agent.env', xray_config=xray, bbr=bbr, bbr_disabled=disabled)
+allowed = set(targets) | {'nginx', 'api_unit', 'agent_unit', 'xray_dropin'}
+limit = 268435456
+
+def safe_path(name):
+    p = Path(name)
+    if not p.is_absolute() or any(q.is_symlink() for q in (p,) + tuple(p.parents)): raise ValueError()
+    if p.exists() and not p.is_file(): raise ValueError()
+    return p
+
+def read(name):
+    p = safe_path(name)
+    if not p.exists(): return None
+    with os.fdopen(os.open(str(p), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
+        a = os.fstat(f.fileno())
+        if not stat.S_ISREG(a.st_mode) or a.st_size > limit: raise ValueError()
+        value = f.read(limit+1)
+        z = os.fstat(f.fileno())
+    if len(value) > limit or any(getattr(a,k) != getattr(z,k) for k in
+        ('st_ino','st_dev','st_size','st_mtime_ns','st_ctime_ns','st_mode','st_uid','st_gid')): raise ValueError()
+    return value, dict(sha256=hashlib.sha256(value).hexdigest(), mode=stat.S_IMODE(a.st_mode),
+        mtime_ns=a.st_mtime_ns, uid=a.st_uid, gid=a.st_gid)
+
+def write(name, payload, record):
+    p = safe_path(name)
+    if not p.parent.is_dir(): raise ValueError()
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=str(p.parent), prefix='.zxy-restore-', delete=False) as f:
+            temporary = f.name
+            f.write(payload)
+            f.flush()
+            os.fchmod(f.fileno(), record['mode'])
+            os.fchown(f.fileno(), record['uid'], record['gid'])
+            os.fsync(f.fileno())
+        os.utime(temporary, ns=(record['mtime_ns'], record['mtime_ns']))
+        os.replace(temporary, str(p))
+        temporary = None
+        fd = os.open(str(p.parent), os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    finally:
+        if temporary and os.path.exists(temporary): os.unlink(temporary)
+
+def rollback(plan, runtime_started=False):
+    # Writers are stopped; refuse to overwrite an unexpected outside write.
+    errors = []
+    for key in reversed(plan['applied']):
+        try:
+            target = targets[key]
+            current = read(target)
+            expected = plan['after'][key]
+            original = plan['originals'][key]
+            if (current[1] if current else None) == original: continue
+            if key == 'database' and runtime_started and current:
+                if not isinstance(json.loads(current[0].decode('utf-8')),dict): raise ValueError()
+                (directory/'failed-runtime-database').write_bytes(current[0])
+                os.chmod(str(directory/'failed-runtime-database'),0o600)
+            elif (current[1]['sha256'] if current else None) != expected: raise ValueError()
+            if original is None:
+                if current: safe_path(target).unlink()
+            else:
+                payload = (directory/('original-'+key)).read_bytes()
+                if hashlib.sha256(payload).hexdigest() != original['sha256']: raise ValueError()
+                write(target, payload, original)
+        except (OSError, ValueError): errors.append(key)
+    if errors: raise ValueError()
+
+try:
+    safe_path(str(directory/'plan.json'))
+    if not directory.is_dir() or stat.S_IMODE(directory.stat().st_mode) != 0o700: raise ValueError()
+    if action == 'prepare':
+        source = safe_path(archive)
+        if source.stat().st_uid != os.geteuid() or source.stat().st_mode & 0o077 or source.stat().st_size > 536870912: raise ValueError()
+        payloads, total = {}, 0
+        with tarfile.open(str(source), 'r:gz') as t:
+            for member in t:
+                name = member.name
+                if name != 'manifest.json' and name not in {'files/'+k for k in allowed}: raise ValueError()
+                if name in payloads or not member.isreg() or member.size < 0 or member.size > limit: raise ValueError()
+                total += member.size
+                if total > 536870912: raise ValueError()
+                payloads[name] = t.extractfile(member).read(limit+1)
+                if len(payloads[name]) != member.size: raise ValueError()
+        meta = json.loads(payloads.pop('manifest.json').decode('utf-8'))
+        if (meta.get('format'), meta.get('install_mode'), meta.get('install_dir'),
+            meta.get('config_dir'), meta.get('database_path')) != (
+            'zxy-panel-config-data-v1', mode, app, config, db): raise ValueError()
+        records, missing = meta.get('files'), meta.get('missing')
+        if not isinstance(records, dict) or not isinstance(missing, list) or any(not isinstance(k,str) for k in missing): raise ValueError()
+        if set(records) & set(missing) or len(missing) != len(set(missing)) or set(records) | set(missing) != allowed: raise ValueError()
+        if set(payloads) != {'files/'+k for k in records}: raise ValueError()
+        for key, record in records.items():
+            value = payloads['files/'+key]
+            if not isinstance(record,dict) or record.get('sha256') != hashlib.sha256(value).hexdigest() or record.get('size') != len(value): raise ValueError()
+            if type(record.get('mode')) is not int or not 0 <= record['mode'] <= 0o777 or type(record.get('mtime_ns')) is not int or record['mtime_ns'] < 0: raise ValueError()
+        if not {'database','environment','panel_info'} <= set(records): raise ValueError()
+        if not isinstance(json.loads(payloads['files/database'].decode('utf-8')),dict): raise ValueError()
+        information = payloads['files/panel_info'].decode('utf-8').splitlines()
+        values = {}
+        for line in information:
+            if '=' not in line: raise ValueError()
+            key,value = line.split('=',1)
+            if key in values or any(c in value for c in '\x00\r\n'): raise ValueError()
+            values[key] = value
+        current = {}
+        for line in read(config+'/panel.info')[0].decode('utf-8').splitlines():
+            key,value = line.split('=',1)
+            if key in current: raise ValueError()
+            current[key] = value
+        for key in ('INSTALL_DIR','INSTALL_MODE','PORT','WEB_BASE_PATH','COMPOSE_PROJECT'):
+            if values.get(key) != current.get(key): raise ValueError()
+        values['VERSION'] = version
+        payloads['files/panel_info'] = ('\n'.join(k+'='+v for k,v in values.items())+'\n').encode()
+        plan = dict(records={}, originals={}, applied=[], after={})
+        for key,target in targets.items():
+            original = read(target)
+            if key not in ('bbr','bbr_disabled') and (original is None) != (key in missing): raise ValueError()
+            value = payloads.get('files/'+key)
+            if value is not None:
+                (directory/('restore-'+key)).write_bytes(value)
+                os.chmod(str(directory/('restore-'+key)),0o600)
+            plan['records'][key] = records.get(key)
+            plan['after'][key] = hashlib.sha256(value).hexdigest() if value is not None else None
+            plan['originals'][key] = original[1] if original else None
+        (directory/'plan.json').write_text(json.dumps(plan), encoding='utf-8')
+        os.chmod(str(directory/'plan.json'),0o600)
+    else:
+        plan = json.loads((directory/'plan.json').read_text(encoding='utf-8'))
+        if action == 'rollback':
+            rollback(plan, archive == 'runtime-started')
+        elif action == 'apply':
+            # Capture a post-stop rollback image before the first replacement.
+            for key,target in targets.items():
+                current = read(target)
+                old = plan['originals'][key]
+                if key != 'database' and (current[1] if current else None) != old: raise ValueError()
+                if current:
+                    (directory/('original-'+key)).write_bytes(current[0])
+                    os.chmod(str(directory/('original-'+key)),0o600)
+                plan['originals'][key] = current[1] if current else None
+            try:
+                for key,target in targets.items():
+                    record = plan['records'][key]
+                    current = read(target)
+                    value = (directory/('restore-'+key)).read_bytes() if record else None
+                    if (hashlib.sha256(value).hexdigest() if value is not None else None) != plan['after'][key]: raise ValueError()
+                    plan['applied'].append(key)
+                    (directory/'plan.json').write_text(json.dumps(plan),encoding='utf-8')
+                    if value is not None:
+                        settings = dict(record, uid=current[1]['uid'] if current else os.geteuid(),
+                            gid=current[1]['gid'] if current else os.getegid())
+                        if key in ('environment','panel_info','agent_environment','xray_config'): settings['mode'] = 0o600
+                        write(target,value,settings)
+                    elif current: safe_path(target).unlink()
+            except (OSError, ValueError):
+                rollback(plan)
+                raise
+        else: raise ValueError()
+except (OSError, ValueError, UnicodeError, TypeError, KeyError, tarfile.TarError):
+    raise SystemExit('ERROR: configuration/data restore failed; retain recovery evidence and inspect actual service state.')
+PY_RESTORE
 }
 
+restore_config_compatible() {
+  local work="$1" key current restored
+  for key in API_PORT WEB_PORT WEB_BASE_PATH ZXY_DB_PATH ZXY_API_ADDR ZXY_AUTO_AGENT ZXY_INSTALL_XRAY \
+    ZXY_SETUP_XRAY_SERVICE COMPOSE_FILE COMPOSE_PROJECT_NAME DOCKER_HOST DOCKER_CONTEXT; do
+    current=$(env_file_value "$key" "$APP_DIR/.env") || return
+    restored=$(env_file_value "$key" "$work/restore-environment") || return
+    [[ "$current" == "$restored" ]] || { echo 'ERROR: restore changes deployment mapping; migration is not supported.' >&2; return 1; }
+  done
+  if [[ -f "$CONFIG_DIR/agent.env" ]]; then
+    for key in ZXY_PANEL_BASE ZXY_SERVER_ID ZXY_AGENT_TOKEN ZXY_APPLY_CONFIG ZXY_XRAY_CONFIG \
+      ZXY_XRAY_TEST_CMD ZXY_XRAY_RELOAD_CMD ZXY_AGENT_INTERVAL; do
+      current=$(env_file_value "$key" "$CONFIG_DIR/agent.env") || return
+      restored=$(env_file_value "$key" "$work/restore-agent_environment" value fast) || return
+      [[ "$current" == "$restored" ]] || { echo 'ERROR: restore changes Agent identity or ownership; no migration attempted.' >&2; return 1; }
+    done
+    local id token
+    id=$(env_file_value ZXY_SERVER_ID "$CONFIG_DIR/agent.env") || return
+    token=$(env_file_value ZXY_AGENT_TOKEN "$CONFIG_DIR/agent.env") || return
+    ZXY_ID_CHECK="$id" ZXY_TOKEN_CHECK="$token" python3 - "$work/restore-database" <<'PY_RESTORE_ID'
+import json, os, sys
+try:
+    data = json.load(open(sys.argv[1],encoding='utf-8'))
+    key, token = os.environ['ZXY_ID_CHECK'], os.environ['ZXY_TOKEN_CHECK']
+    server = data.get('servers',{}).get(key)
+    if not key or not token or not isinstance(server,dict) or server.get('id') != key or server.get('agent_token') != token: raise ValueError()
+except (OSError, ValueError, TypeError, AttributeError):
+    raise SystemExit('ERROR: restored database does not match the retained Agent identity.')
+PY_RESTORE_ID
+  fi
+}
+
+restore_unit_owned() {
+  local unit="$1" file="$2" binary="$3" environment="$4" directory="$5"
+  local fragment dropins execution effective_environment effective_directory hooks property
+  fragment=$(systemctl show "$unit" -p FragmentPath --value) || return
+  dropins=$(systemctl show "$unit" -p DropInPaths --value) || return
+  execution=$(systemctl show "$unit" -p ExecStart --value) || return
+  effective_environment=$(systemctl show "$unit" -p EnvironmentFiles --value) || return
+  effective_directory=$(systemctl show "$unit" -p WorkingDirectory --value) || return
+  [[ -f "$file" && ! -L "$file" && "$fragment" == "$file" && -z "$dropins" &&
+     "$effective_environment" == "$environment (ignore_errors=no)" &&
+     ( -z "$directory" || "$effective_directory" == "$directory" ) ]] || return 1
+  for property in ExecStartPre ExecStartPost ExecStop ExecStopPost ExecReload; do
+    hooks=$(systemctl show "$unit" -p "$property" --value) || return
+    [[ -z "$hooks" ]] || return 1
+  done
+  hooks=$(systemctl show "$unit" -p UnsetEnvironment --value) || return
+  [[ -z "$hooks" ]] || return 1
+  restore_actions_safe "$unit" || return
+  ZXY_UNIT_EXECUTION="$execution" python3 - "$binary" "$file" "$environment" "$directory" <<'PY_RESTORE_UNIT'
+import os,re,shlex,sys
+from pathlib import Path
+execution = os.environ['ZXY_UNIT_EXECUTION']
+match = re.search(r'path=(.*?) ; argv\[\]=(.*?) ;',execution)
+try:
+    section, values = '', {}
+    for line in Path(sys.argv[2]).read_text(encoding='utf-8').splitlines():
+        line=line.strip()
+        if line.startswith('['): section=line
+        elif section=='[Service]' and '=' in line and not line.startswith(('#',';')):
+            key,value=line.split('=',1)
+            values.setdefault(key,[]).append(shlex.split(value))
+    allowed={'Type','WorkingDirectory','EnvironmentFile','ExecStart','Restart','RestartSec','LimitNOFILE'}
+    if set(values)-allowed or values.get('EnvironmentFile') != [[sys.argv[3]]] or values.get('ExecStart') != [[sys.argv[1]]]: raise ValueError()
+    if sys.argv[4] and values.get('WorkingDirectory') != [[sys.argv[4]]]: raise ValueError()
+    if execution.count('path=')!=1 or not match or match[1]!=sys.argv[1] or match[2]!=sys.argv[1]: raise ValueError()
+except (OSError,UnicodeError,ValueError):
+    raise SystemExit(1)
+PY_RESTORE_UNIT
+}
+
+restore_actions_safe() {
+  local property value
+  for property in StartLimitAction FailureAction SuccessAction; do
+    value=$(systemctl show "$1" -p "$property" --value) || return
+    [[ "$value" == none ]] || return 1
+  done
+  for property in OnFailure OnSuccess; do
+    value=$(systemctl show "$1" -p "$property" --value) || return
+    [[ -z "$value" ]] || return 1
+  done
+}
+
+restore_api_database_matches() {
+  local pid after
+  pid=$(systemctl show zxy-panel-api -p MainPID --value) || return
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  python3 - "$PROC_DIRECTORY" "$pid" "$APP_DIR" "$DB_PATH" <<'PY_RUNNING_DB' || return
+import sys
+from pathlib import Path
+try:
+    proc=Path(sys.argv[1])/sys.argv[2]
+    with (proc/'environ').open('rb') as source: payload=source.read(1048577)
+    if len(payload)>1048576: raise ValueError()
+    values={}
+    for item in payload.rstrip(b'\0').split(b'\0'):
+        key,value=item.split(b'=',1)
+        if key in values: raise ValueError()
+        values[key]=value
+    current=values.get(b'ZXY_DB_PATH',b'').decode('utf-8')
+    if current!=sys.argv[4] or (proc/'cwd').resolve(strict=True)!=Path(sys.argv[3]).resolve(strict=True): raise ValueError()
+except (OSError,UnicodeError,ValueError):
+    raise SystemExit('ERROR: running API database mapping cannot be confirmed.')
+PY_RUNNING_DB
+  after=$(systemctl show zxy-panel-api -p MainPID --value) || return
+  [[ "$after" == "$pid" ]] || return 1
+}
+
+restore_docker_mapping() {
+  local model api frontend
+  model=$(run_panel_compose config --format json) || {
+    echo 'ERROR: Compose JSON mapping cannot be confirmed; no restore action taken.' >&2; return 1;
+  }
+  api=$(docker inspect zxy-panel-api) || return
+  frontend=$(docker inspect zxy-panel-frontend) || return
+  printf '%s\n%s\n%s\n' "$model" "$api" "$frontend" | python3 -c '
+import json,sys
+try:
+    text = sys.stdin.read(1048577)
+    if len(text)>1048576: raise ValueError()
+    decoder, offset, objects = json.JSONDecoder(), 0, []
+    for _ in range(3):
+        while offset<len(text) and text[offset].isspace(): offset+=1
+        value, offset=decoder.raw_decode(text,offset)
+        objects.append(value)
+    if text[offset:].strip(): raise ValueError()
+    model, api, frontend = objects
+    app, api_port, web_port = sys.argv[1:]
+    services = model["services"]
+    if set(services) != {"zxy-panel-api","zxy-panel-frontend"}: raise ValueError()
+    result = {}
+    for name, rows, port, target, directory in (
+        ("zxy-panel-api",api,api_port,8088,"backend"),
+        ("zxy-panel-frontend",frontend,web_port,5173,"frontend")):
+        if not isinstance(rows,list) or len(rows)!=1: raise ValueError()
+        item, service = rows[0], services[name]
+        labels = item["Config"]["Labels"]
+        project = labels["com.docker.compose.project"]
+        if labels.get("com.docker.compose.service") != name or not project: raise ValueError()
+        if labels.get("com.docker.compose.project.working_dir") != app or labels.get("com.docker.compose.project.config_files") != app+"/docker-compose.yml": raise ValueError()
+        if item.get("Name") != "/"+name or service.get("container_name") != name: raise ValueError()
+        if service.get("network_mode") or service.get("privileged") or service.get("pid") or service.get("ipc") or service.get("cap_add"): raise ValueError()
+        if service.get("pull_policy") not in (None,"","never","missing","if_not_present"): raise ValueError()
+        if service.get("command") is not None or service.get("entrypoint") is not None: raise ValueError()
+        ports = service.get("ports")
+        if not isinstance(ports,list) or len(ports)!=1: raise ValueError()
+        p = ports[0]
+        if str(p.get("published")) != port or p.get("target") != target or p.get("host_ip") != "127.0.0.1" or p.get("protocol","tcp") != "tcp": raise ValueError()
+        bindings = item["HostConfig"]["PortBindings"]
+        if bindings != {str(target)+"/tcp":[{"HostIp":"127.0.0.1","HostPort":port}]}: raise ValueError()
+        volumes, mounts = service.get("volumes") or [], item.get("Mounts") or []
+        if name=="zxy-panel-api":
+            if len(volumes)!=1 or len(mounts)!=1: raise ValueError()
+            v,m=volumes[0],mounts[0]
+            if v.get("type")!="bind" or v.get("source")!=app+"/data" or v.get("target")!="/app/data" or v.get("read_only"): raise ValueError()
+            if m.get("Type")!="bind" or m.get("Source")!=app+"/data" or m.get("Destination")!="/app/data" or m.get("RW") is not True: raise ValueError()
+            if service.get("environment",{}).get("ZXY_DB_PATH")!="/app/data/zxy-panel.json": raise ValueError()
+            actual_env={}
+            for entry in item["Config"].get("Env",[]):
+                key,value=entry.split("=",1)
+                if key in actual_env: raise ValueError()
+                actual_env[key]=value
+            if actual_env.get("ZXY_DB_PATH")!="/app/data/zxy-panel.json": raise ValueError()
+        elif volumes or mounts: raise ValueError()
+        tag, image = item["Config"]["Image"], item["Image"]
+        if not isinstance(tag,str) or not tag or not isinstance(image,str) or not image: raise ValueError()
+        if service.get("image"):
+            if service["image"]!=tag: raise ValueError()
+        else:
+            if tag not in {project+separator+name+suffix for separator in ("-","_") for suffix in ("",":latest")}: raise ValueError()
+            if service.get("build",{}).get("context") != app+"/"+directory: raise ValueError()
+        result[name]={"tag":tag,"image":image,"port":port,"target":target,
+            "data":app+"/data" if name=="zxy-panel-api" else ""}
+    print(json.dumps(result,sort_keys=True,separators=(",",":")))
+except (ValueError,TypeError,KeyError,AttributeError):
+    raise SystemExit("ERROR: Compose/container service mapping changed or is unsupported.")
+' "$APP_DIR" "$API_PORT" "$WEB_PORT"
+}
+
+restore_runtime_preflight() {
+  RESTORE_ACTIVE_UNITS=()
+  local unit state binary fragment dropins execution user group property hooks
+  if [[ "$MODE" == fast ]]; then
+    binary="$APP_DIR/bin/zxy-panel-api-linux-amd64"
+    [[ -f "$binary" ]] || binary="$APP_DIR/bin/zxy-panel-api"
+    restore_unit_owned zxy-panel-api "$API_UNIT_FILE" "$binary" "$APP_DIR/.env" "$APP_DIR" || {
+      echo 'ERROR: API service ownership cannot be confirmed.' >&2; return 1;
+    }
+    state=$(systemctl is-active zxy-panel-api) || { echo 'ERROR: restore requires a running owned API.' >&2; return 1; }
+    [[ "$state" == active ]] || return 1
+    restore_api_database_matches || return
+  else
+    local name tag id current options
+    options=$(run_panel_compose up --help) || return
+    grep -Eq -- '(^|[[:space:]])--pull([[:space:]]|,)' <<< "$options" || {
+      echo 'ERROR: Compose cannot prohibit pulling images; restore refused before stop.' >&2; return 1;
+    }
+    RESTORE_DOCKER_MAPPING=$(restore_docker_mapping) || return
+    RESTORE_IMAGE_TAGS=(); RESTORE_IMAGE_IDS=()
+    for name in zxy-panel-api zxy-panel-frontend; do
+      state=$(docker inspect --format '{{.State.Running}}' "$name") || return
+      [[ "$state" == true ]] || { echo 'ERROR: restore requires running owned containers.' >&2; return 1; }
+      tag=$(docker inspect --format '{{.Config.Image}}' "$name") || return
+      id=$(docker inspect --format '{{.Image}}' "$name") || return
+      [[ -n "$tag" && -n "$id" ]] || return 1
+      current=$(docker image inspect --format '{{.Id}}' "$tag") || return
+      [[ "$current" == "$id" ]] || { echo 'ERROR: current Compose images changed; program rollback is outside restore.' >&2; return 1; }
+      RESTORE_IMAGE_TAGS+=("$tag"); RESTORE_IMAGE_IDS+=("$id")
+    done
+  fi
+  for unit in zxy-agent xray; do
+    state=$(systemctl show "$unit" -p LoadState --value) || return
+    if [[ "$state" == not-found ]]; then continue; fi
+    [[ "$state" == loaded ]] || return 1
+    restore_actions_safe "$unit" || return
+    if [[ "$unit" == zxy-agent ]]; then
+      restore_unit_owned zxy-agent "$AGENT_UNIT_FILE" /usr/local/bin/zxy-agent "$CONFIG_DIR/agent.env" '' || {
+        echo 'ERROR: Agent service ownership cannot be confirmed.' >&2; return 1;
+      }
+    else
+      [[ -f "$XRAY_DROPIN_FILE" && ! -L "$XRAY_DROPIN_FILE" ]] || return 1
+      fragment=$(systemctl show xray -p FragmentPath --value) || return
+      dropins=$(systemctl show xray -p DropInPaths --value) || return
+      execution=$(systemctl show xray -p ExecStart --value) || return
+      user=$(systemctl show xray -p User --value) || return
+      group=$(systemctl show xray -p Group --value) || return
+      [[ -f "$fragment" && ! -L "$fragment" && "$user" == root && "$group" == root ]] || return 1
+      binary=$(command -v xray) || return
+      ZXY_UNIT_EXECUTION="$execution" ZXY_UNIT_DROPINS="$dropins" python3 - "$binary" "$XRAY_CONFIG" "$XRAY_DROPIN_FILE" <<'PY_RESTORE_XRAY' || return
+import os, re, shlex, sys
+from pathlib import Path
+
+def service_values(path, allowed):
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('untrusted drop-in')
+    section, values = '', {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith(('#', ';')):
+            continue
+        if line == '[Service]':
+            section = line
+            continue
+        if section != '[Service]' or '=' not in line:
+            raise ValueError('unexpected drop-in content')
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if key not in allowed:
+            raise ValueError('unexpected service directive')
+        values.setdefault(key, []).append(value.strip())
+    return values
+
+try:
+    panel = Path(sys.argv[3])
+    stock = panel.parent / '10-donot_touch_single_conf.conf'
+    paths = shlex.split(os.environ['ZXY_UNIT_DROPINS'])
+    # Match the installer guard: only a verified default before our override is allowed.
+    if paths not in ([str(panel)], [str(stock), str(panel)]):
+        raise ValueError('unexpected drop-in list')
+    if len(paths) == 2:
+        defaults = service_values(stock, {'ExecStart'})
+        starts = defaults.get('ExecStart', [])
+        if len(starts) != 2 or starts[0] != '' or shlex.split(starts[1]) != [
+                sys.argv[1], 'run', '-config', '/usr/local/etc/xray/config.json']:
+            raise ValueError('modified single-config default')
+    values = service_values(panel, {'User', 'Group', 'ExecStart'})
+    starts = values.get('ExecStart', [])
+    valid = values.get('User') == ['root'] and values.get('Group') == ['root']
+    valid = valid and len(starts) == 2 and starts[0] == ''
+    valid = valid and shlex.split(starts[1]) == [sys.argv[1], 'run', '-config', sys.argv[2]]
+    execution = os.environ['ZXY_UNIT_EXECUTION']
+    match = re.search(r'path=(.*?) ; argv\[\]=(.*?) ;', execution)
+    valid = valid and execution.count('path=') == 1 and bool(match) and match[1] == sys.argv[1]
+    valid = valid and match[2] == ' '.join((sys.argv[1], 'run', '-config', sys.argv[2]))
+    raise SystemExit(0 if valid else 1)
+except (OSError, UnicodeError, ValueError, IndexError):
+    raise SystemExit(1)
+PY_RESTORE_XRAY
+      for property in ExecStartPre ExecStartPost ExecStop ExecStopPost; do
+        hooks=$(systemctl show xray -p "$property" --value) || return
+        [[ -z "$hooks" ]] || return 1
+      done
+    fi
+    state=$(systemctl is-active "$unit") || {
+      [[ "$state" == inactive || "$state" == failed ]] || return 1
+    }
+    case "$state" in active) RESTORE_ACTIVE_UNITS+=("$unit") ;; inactive|failed) ;; *) return 1 ;; esac
+  done
+  nginx -t || return
+}
+
+restore_runtime_start() {
+  local unit index current mapping
+  if [[ "$MODE" == fast ]]; then
+    systemctl start zxy-panel-api || return
+  else
+    mapping=$(restore_docker_mapping) || return
+    [[ "$mapping" == "$RESTORE_DOCKER_MAPPING" ]] || return 1
+    for index in 0 1; do
+      current=$(docker image inspect --format '{{.Id}}' "${RESTORE_IMAGE_TAGS[$index]}") || return
+      [[ "$current" == "${RESTORE_IMAGE_IDS[$index]}" ]] || return 1
+    done
+    run_panel_compose up -d --no-build --pull never --force-recreate --no-deps zxy-panel-api zxy-panel-frontend || return
+    mapping=$(restore_docker_mapping) || return
+    [[ "$mapping" == "$RESTORE_DOCKER_MAPPING" ]] || return 1
+  fi
+  for unit in "${RESTORE_ACTIVE_UNITS[@]}"; do systemctl start "$unit" || return; done
+}
+
+restore_runtime_stop() {
+  local unit
+  for unit in "${RESTORE_ACTIVE_UNITS[@]}"; do systemctl stop "$unit" || return; done
+  if [[ "$MODE" == fast ]]; then systemctl stop zxy-panel-api
+  else run_panel_compose stop zxy-panel-api zxy-panel-frontend; fi
+}
+
+restore_health() {
+  local attempt
+  for attempt in {1..30}; do
+    if health_check "http://127.0.0.1:$API_PORT/api/health" "$EXPECTED_VERSION" &&
+       health_check "http://127.0.0.1:$PORT/api/health" "$EXPECTED_VERSION" &&
+       health_check "http://127.0.0.1:$PORT/$WEB_BASE_PATH/api/health" "$EXPECTED_VERSION"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+restore_backup() {
+  local backup="${1:-}" work safety failure=0 runtime_started=''
+  load_operational_config || return
+  [[ -n "$backup" ]] || backup=$(latest_backup_file)
+  [[ -n "$backup" ]] || { echo 'ERROR: no restore input found.' >&2; return 1; }
+  # Recovery evidence stays private and is never removed after a failure.
+  work=$(mktemp -d "$APP_DIR/backups/.restore-XXXXXX") || return
+  chmod 700 "$work" || return
+  if ! restore_files prepare "$work" "$backup" || ! restore_config_compatible "$work"; then
+    echo "Restore preflight failed; input and source files unchanged. Recovery evidence: $work" >&2
+    return 1
+  fi
+  restore_runtime_preflight || { echo 'ERROR: restore runtime preflight failed; no writer stopped.' >&2; report_runtime_state; return 1; }
+  safety=$(create_backup pre-restore) || { report_runtime_state; return 1; }
+  echo "Independent safety backup: $safety"
+  if ! restore_runtime_stop; then
+    echo 'ERROR: writers could not be stopped; no restored files applied.' >&2
+    if ! restore_runtime_start || ! restore_health; then echo 'ERROR: original runtime recovery is incomplete.' >&2; fi
+    report_runtime_state
+    return 1
+  fi
+  restore_files apply "$work" || failure=1
+  if (( failure == 0 )); then
+    runtime_started=runtime-started
+    if restore_runtime_start && restore_health; then
+      echo 'Configuration/data restore completed; current program and all API health versions confirmed.'
+      echo "Recovery evidence: $work"
+      echo 'BBR persistent settings restored; live kernel settings were not changed.'
+      return 0
+    fi
+  fi
+  # No success is printed on any failed apply, service recovery or health check.
+  if ! restore_runtime_stop; then
+    echo "ERROR: cannot confirm stopped writers for rollback. Recovery evidence: $work" >&2
+    report_runtime_state
+    return 1
+  fi
+  if [[ -f "$work/plan.json" ]] && ! restore_files rollback "$work" "$runtime_started"; then
+    echo "ERROR: file rollback incomplete; writers remain stopped where possible. Recovery evidence: $work" >&2
+    report_runtime_state
+    return 1
+  fi
+  if ! restore_runtime_start || ! restore_health; then echo 'ERROR: original runtime recovery is incomplete.' >&2; fi
+  echo "ERROR: restore was not completed; original file recovery attempted. Recovery evidence: $work" >&2
+  report_runtime_state
+  return 1
+}
+
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 
 case "${1:-}" in
   info)
@@ -218,7 +1192,7 @@ case "${1:-}" in
     ACCESS_URL=$(get_info ACCESS_URL)
     DATABASE=$(get_info DATABASE)
     VERSION=$(get_info VERSION)
-    MODE=$(get_info INSTALL_MODE)
+    MODE=$(install_mode)
     SHOW_SECRET="false"
     if [[ "${2:-}" == "--show-secret" ]]; then
       SHOW_SECRET="true"
@@ -250,7 +1224,7 @@ case "${1:-}" in
 
   status)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == "fast" ]]; then
       systemctl status zxy-panel-api --no-pager -l 2>/dev/null || true
       echo
       systemctl status zxy-agent --no-pager -l 2>/dev/null || true
@@ -260,7 +1234,7 @@ case "${1:-}" in
       COMPOSE=$(compose_cmd)
       if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
         cd "$APP_DIR"
-        $COMPOSE ps || true
+        run_panel_compose ps
         echo
         systemctl status zxy-agent --no-pager -l 2>/dev/null || true
         systemctl status nginx --no-pager -l 2>/dev/null || true
@@ -271,28 +1245,12 @@ case "${1:-}" in
     ;;
 
   restart)
-    MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
-      systemctl restart zxy-panel-api 2>/dev/null || true
-      systemctl restart zxy-agent 2>/dev/null || true
-      systemctl restart nginx 2>/dev/null || true
-    else
-      COMPOSE=$(compose_cmd)
-      if [[ -z "$COMPOSE" ]]; then
-        echo "docker compose not found"
-        exit 1
-      fi
-      cd "$APP_DIR"
-      $COMPOSE restart
-      systemctl restart zxy-agent 2>/dev/null || true
-      systemctl restart nginx 2>/dev/null || true
-    fi
-    echo "ZXY Panel restarted."
+    restart_panel
     ;;
 
   logs)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == "fast" ]]; then
       echo "Showing fast-mode logs. Ctrl+C to exit."
       journalctl -u zxy-panel-api -u zxy-agent -f --no-pager
     else
@@ -302,7 +1260,7 @@ case "${1:-}" in
         exit 1
       fi
       cd "$APP_DIR"
-      $COMPOSE logs --tail=120 -f
+      run_panel_compose logs --tail=120 -f
     fi
     ;;
 
@@ -372,7 +1330,10 @@ PY
     fi
 
     VERSION=$(get_info VERSION || true)
-    MODE=$(get_info INSTALL_MODE || true)
+    if ! load_operational_config; then
+      echo 'Doctor result: FAIL (operational configuration is not confirmed)'
+      exit 1
+    fi
     PORT=$(get_info PORT || true)
     WEB_BASE_PATH=$(get_info WEB_BASE_PATH || true)
     ACCESS_URL=$(get_info ACCESS_URL || true)
@@ -383,21 +1344,37 @@ PY
     printf "%-14s %s\n" "Access URL:" "${ACCESS_URL:-unknown}"
     echo
 
-    for unit in zxy-panel-api zxy-agent xray nginx; do
-      if ! service_check "$unit"; then
+    if [[ "$MODE" == fast ]]; then
+      service_check zxy-panel-api || FAILS=$((FAILS+1))
+    else
+      if ! run_panel_compose config --quiet >/dev/null; then
+        status_line 'Docker ownership/config' fail 'not confirmed'
         FAILS=$((FAILS+1))
+      else
+        for container in zxy-panel-api zxy-panel-frontend; do
+          if [[ "$(docker inspect --format '{{.State.Running}}' "$container")" == true ]]; then
+            status_line "$container" ok 'running container'
+          else status_line "$container" fail 'container is not running'; FAILS=$((FAILS+1))
+          fi
+        done
       fi
-    done
+    fi
+    service_check nginx || FAILS=$((FAILS+1))
+    optional_service_check zxy-agent "$AUTO_AGENT" || FAILS=$((FAILS+1))
+    XRAY_REQUESTED=false
+    if [[ "$AUTO_AGENT" == true && "$SETUP_XRAY_SERVICE" == true ]]; then XRAY_REQUESTED=true; fi
+    optional_service_check xray "$XRAY_REQUESTED" || FAILS=$((FAILS+1))
 
-    if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8088/api/health >/dev/null 2>&1; then
-      status_line "API health" ok "http://127.0.0.1:8088/api/health"
+    if health_check "http://127.0.0.1:$API_PORT/api/health" "$EXPECTED_VERSION"; then
+      status_line "API health" ok 'JSON, service and installed version confirmed'
     else
       status_line "API health" fail "local API is not responding"
       FAILS=$((FAILS+1))
     fi
 
-    if [[ -n "${PORT:-}" ]] && command -v curl >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
-      status_line "Nginx API proxy" ok "http://127.0.0.1:${PORT}/api/health"
+    if health_check "http://127.0.0.1:$PORT/api/health" "$EXPECTED_VERSION" &&
+       health_check "http://127.0.0.1:$PORT/$WEB_BASE_PATH/api/health" "$EXPECTED_VERSION"; then
+      status_line "Nginx API proxy" ok 'root and prefixed API version confirmed'
     else
       status_line "Nginx API proxy" fail "panel port API proxy is not responding"
       FAILS=$((FAILS+1))
@@ -410,16 +1387,15 @@ PY
       FAILS=$((FAILS+1))
     fi
 
-    if [[ -f /etc/zxy-panel/xray/config.json ]]; then
-      status_line "Xray config" ok "/etc/zxy-panel/xray/config.json"
+    if [[ -f "$XRAY_CONFIG" ]]; then
+      status_line "Xray config" ok 'configured file exists'
     else
-      status_line "Xray config" warn "missing; create an inbound/client to generate it"
-      WARNS=$((WARNS+1))
+      status_line "Xray config" info 'not generated or component not installed'
     fi
 
-    if [[ -f "$APP_DIR/.env" ]] && grep -q '^ZXY_UPDATE_MANIFEST_URL=' "$APP_DIR/.env"; then
-      MANIFEST=$(grep -E '^ZXY_UPDATE_MANIFEST_URL=' "$APP_DIR/.env" | head -n1 | cut -d= -f2-)
-      status_line "Update manifest" ok "$MANIFEST"
+    MANIFEST=$(env_file_value ZXY_UPDATE_MANIFEST_URL)
+    if [[ -n "$MANIFEST" ]]; then
+      status_line "Update manifest" ok 'configured; remote availability not checked'
     else
       status_line "Update manifest" warn "ZXY_UPDATE_MANIFEST_URL is not set"
       WARNS=$((WARNS+1))
@@ -427,27 +1403,37 @@ PY
 
     BACKUP_DIR="$(backup_dir)"
     if [[ -d "$BACKUP_DIR" ]]; then
-      LATEST_BACKUP="$(latest_backup_file || true)"
-      if [[ -n "$LATEST_BACKUP" ]]; then
+      if ! LATEST_BACKUP=$(latest_backup_file); then
+        status_line "Backup status" warn 'latest backup cannot be confirmed; use an explicit archive'
+        WARNS=$((WARNS+1))
+      elif [[ -n "$LATEST_BACKUP" ]]; then
         status_line "Backup status" ok "latest: $LATEST_BACKUP"
       else
-        status_line "Backup status" warn "backup directory exists but no backup file found"
-        WARNS=$((WARNS+1))
+        status_line "Backup status" info "no existing backup; create one before maintenance"
       fi
     else
-      status_line "Backup status" warn "backup directory missing"
-      WARNS=$((WARNS+1))
+      status_line "Backup status" info "no existing backup; create one before maintenance"
     fi
 
-    if [[ -f "$APP_DIR/data/zxy-panel.json" ]]; then
-      status_line "Data file" ok "$APP_DIR/data/zxy-panel.json"
+    if [[ -f "$DB_PATH" && ! -L "$DB_PATH" ]] && python3 - "$DB_PATH" <<'PY_DOCTOR_DB'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        if not isinstance(json.load(f), dict): raise ValueError()
+except (OSError, ValueError):
+    raise SystemExit(1)
+PY_DOCTOR_DB
+    then
+      status_line "Data file" ok 'configured database JSON is readable'
     else
-      status_line "Data file" fail "missing: $APP_DIR/data/zxy-panel.json"
+      status_line "Data file" fail "configured database is missing or invalid"
       FAILS=$((FAILS+1))
     fi
 
-    RESTART_LINES=$(recent_xray_restart_count || echo 0)
-    if [[ "${RESTART_LINES:-0}" -gt 8 ]]; then
+    if ! RESTART_LINES=$(recent_xray_restart_count); then
+      status_line "Xray restart watch" warn 'journal observation unavailable'
+      WARNS=$((WARNS+1))
+    elif [[ "$RESTART_LINES" -gt 8 ]]; then
       status_line "Xray restart watch" warn "recent restart/config lines in 3 minutes: ${RESTART_LINES}"
       WARNS=$((WARNS+1))
     else
@@ -465,7 +1451,7 @@ PY
     ;;
 
   backup)
-    BACKUP_FILE="$(create_backup "manual")"
+    BACKUP_FILE="$(create_backup "manual")" || { report_runtime_state; exit 1; }
     if [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]]; then
       echo "Backup created: $BACKUP_FILE"
     fi
@@ -480,49 +1466,52 @@ PY
     ;;
 
   update)
-    MANIFEST_URL="${ZXY_UPDATE_MANIFEST_URL:-https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json}"
+    if [[ ${ZXY_UPDATE_MANIFEST_URL+present} ]]; then
+      MANIFEST_URL="$ZXY_UPDATE_MANIFEST_URL"
+    else
+      MANIFEST_URL=$(env_file_value ZXY_UPDATE_MANIFEST_URL) || exit 1
+      if [[ -z "$MANIFEST_URL" ]] && [[ "$(env_file_value ZXY_UPDATE_MANIFEST_URL "$APP_DIR/.env" present)" != present ]]; then
+        MANIFEST_URL=https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/version.json
+      fi
+    fi
+    python3 - "$MANIFEST_URL" <<'PY_MANIFEST_URL'
+import sys
+from urllib.parse import urlsplit
+try:
+    value = sys.argv[1]
+    parsed = urlsplit(value)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or any(c.isspace() or ord(c)<32 for c in value):
+        raise ValueError()
+except ValueError:
+    raise SystemExit('ERROR: manifest URL must be a valid HTTPS URL without credentials.')
+PY_MANIFEST_URL
     echo "ZXY Panel Update Helper"
     echo "Manifest: ${MANIFEST_URL}"
-    echo
-    echo "This helper checks the remote version manifest. The web panel also provides: 系统升级 -> 检查更新。"
-    if ! command -v python3 >/dev/null 2>&1; then
-      echo "python3 not found. Please use the web panel or install python3."
+    MANIFEST_FILE=$(mktemp)
+    if ! curl -fsS --connect-timeout 4 --max-time 12 --max-filesize 262144 "$MANIFEST_URL" -o "$MANIFEST_FILE"; then
+      rm -f "$MANIFEST_FILE"
+      echo 'ERROR: manifest fetch failed; no upgrade command generated.' >&2
       exit 1
     fi
-    python3 - "$MANIFEST_URL" <<'PY_UPDATE'
-import json, sys, urllib.request
-url=sys.argv[1]
-try:
-    with urllib.request.urlopen(url, timeout=8) as r:
-        data=json.loads(r.read().decode())
-except Exception as e:
-    print('Failed to fetch manifest:', e)
-    sys.exit(1)
-latest=data.get('latest') or data.get('version') or '-'
-pkg=data.get('package') or '-'
-dl=data.get('download_url') or '-'
-sha=data.get('sha256') or ''
-print('Latest:', latest)
-print('Package:', pkg)
-print('Download:', dl)
-if sha:
-    print('SHA256:', sha)
-print('\nCopy this command to upgrade after confirming the package:')
-print('cd /root && mkdir -p zxy-panel-upgrades && cd zxy-panel-upgrades && curl -L --fail -o %s %s && unzip -o %s && cd %s && bash deploy/install.sh 2>&1 | tee /root/zxy-panel-upgrade.log' % (pkg, dl, pkg, pkg[:-4] if pkg.endswith('.zip') else pkg))
-PY_UPDATE
+    UPDATE_STATUS=0
+    generate_upgrade_command "$MANIFEST_FILE" "$(get_info VERSION)" || UPDATE_STATUS=$?
+    rm -f "$MANIFEST_FILE" || exit 1
+    exit "$UPDATE_STATUS"
     ;;
 
   uninstall)
     MODE=$(install_mode)
-    if [[ "$MODE" == "fast" ]] || systemctl list-unit-files 2>/dev/null | grep -q '^zxy-panel-api.service'; then
+    if [[ "$MODE" == docker ]]; then
+      run_panel_compose config --quiet
+    fi
+    if [[ "$MODE" == "fast" ]]; then
       systemctl stop zxy-panel-api 2>/dev/null || true
       systemctl disable zxy-panel-api 2>/dev/null || true
       rm -f /etc/systemd/system/zxy-panel-api.service
     fi
-    COMPOSE=$(compose_cmd)
-    if [[ -n "$COMPOSE" && -d "$APP_DIR" ]]; then
+    if [[ "$MODE" == docker ]]; then
       cd "$APP_DIR"
-      $COMPOSE down || true
+      run_panel_compose down
     fi
     systemctl stop zxy-agent 2>/dev/null || true
     systemctl disable zxy-agent 2>/dev/null || true

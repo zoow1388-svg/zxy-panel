@@ -2,6 +2,8 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -36,7 +38,7 @@ func (r *Router) relays(w http.ResponseWriter, req *http.Request) {
 		r.store.Mu.Lock()
 		defer r.store.Mu.Unlock()
 		if err := r.normalizeRelayLocked(&body, ""); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeBindingValidationError(w, err)
 			return
 		}
 		now := time.Now()
@@ -44,9 +46,10 @@ func (r *Router) relays(w http.ResponseWriter, req *http.Request) {
 		body.Enabled = true
 		body.CreatedAt = now
 		body.UpdatedAt = now
-		r.store.Data.RelayRoutes[body.ID] = body
-		r.store.AddLog(currentClaims(req).Username, "relay.create", clientIP(req), body.Name)
-		_ = r.store.SaveLocked()
+		if err := r.store.CreateRelayLocked(body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusCreated, body)
 	default:
 		methodNotAllowed(w)
@@ -70,39 +73,106 @@ func (r *Router) relayByID(w http.ResponseWriter, req *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodPut:
-		var body model.RelayRoute
-		if err := readJSON(req, &body); err != nil {
+		if _, err := r.store.RelayLocked(id); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
+		body, err := readRelayUpdate(req, item)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
+		if body.RelayServerID == "" {
+			writeBindingMutationError(w, &store.BindingConflictError{Conflicts: []store.BindingConflict{{Kind: "server_parent", Message: "The current relay has no server; no default server was selected."}}})
+			return
+		}
 		if err := r.normalizeRelayLocked(&body, id); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeBindingValidationError(w, err)
 			return
 		}
 		body.ID = id
 		body.CreatedAt = item.CreatedAt
 		body.UpdatedAt = time.Now()
-		r.store.Data.RelayRoutes[id] = body
-		r.store.AddLog(currentClaims(req).Username, "relay.update", clientIP(req), id)
-		_ = r.store.SaveLocked()
+		if err := r.store.UpdateRelayLocked(id, body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, body)
 	case http.MethodDelete:
-		delete(r.store.Data.RelayRoutes, id)
-		for cid, c := range r.store.Data.Clients {
-			next := make([]string, 0, len(c.RelayRouteIDs))
-			for _, rid := range c.RelayRouteIDs {
-				if rid != id {
-					next = append(next, rid)
-				}
-			}
-			c.RelayRouteIDs = next
-			r.store.Data.Clients[cid] = c
+		if err := r.store.DeleteRelayLocked(id, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
 		}
-		r.store.AddLog(currentClaims(req).Username, "relay.delete", clientIP(req), id)
-		_ = r.store.SaveLocked()
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		methodNotAllowed(w)
+	}
+}
+
+func readRelayUpdate(req *http.Request, current model.RelayRoute) (model.RelayRoute, error) {
+	var fields map[string]json.RawMessage
+	if err := readJSON(req, &fields); err != nil || fields == nil {
+		return model.RelayRoute{}, errors.New("invalid json object")
+	}
+	raw, err := json.Marshal(current)
+	if err != nil {
+		return model.RelayRoute{}, err
+	}
+	var original map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &original); err != nil {
+		return model.RelayRoute{}, err
+	}
+	for _, name := range []string{"relay_server_id", "route_mode", "landing_mode", "landing_node_id", "manual_socks_host", "manual_socks_port", "manual_socks_username", "manual_socks_password", "manual_socks_udp"} {
+		provided := false
+		for key, value := range fields {
+			if !strings.EqualFold(key, name) {
+				continue
+			}
+			if provided || strings.TrimSpace(string(value)) == "null" {
+				return model.RelayRoute{}, errors.New("invalid protected field")
+			}
+			provided = true
+			if name == "relay_server_id" {
+				var serverID string
+				if json.Unmarshal(value, &serverID) != nil || strings.TrimSpace(serverID) == "" {
+					return model.RelayRoute{}, errors.New("invalid relay server")
+				}
+			}
+		}
+		if !provided {
+			fields[name] = original[name]
+		}
+	}
+	raw, err = json.Marshal(fields)
+	if err != nil {
+		return model.RelayRoute{}, err
+	}
+	var body model.RelayRoute
+	err = json.Unmarshal(raw, &body)
+	body.RelayServerID = strings.TrimSpace(body.RelayServerID)
+	return body, err
+}
+
+func writeBindingValidationError(w http.ResponseWriter, err error) {
+	var conflict *store.BindingConflictError
+	if errors.As(err, &conflict) || errors.Is(err, store.ErrBindingTargetMissing) {
+		writeBindingMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+}
+
+func writeBindingMutationError(w http.ResponseWriter, err error) {
+	var conflict *store.BindingConflictError
+	switch {
+	case errors.Is(err, store.ErrRelayNotFound), errors.Is(err, store.ErrClientNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	case errors.Is(err, store.ErrBindingTargetMissing):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	case errors.As(err, &conflict):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": conflict.Error(), "conflicts": conflict.Conflicts})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save binding mutation; no changes committed."})
 	}
 }
 
@@ -137,9 +207,25 @@ func (r *Router) normalizeRelayLocked(relay *model.RelayRoute, currentID string)
 	default:
 		return fmt.Errorf("中转类型只支持 TCP 透传中转或 SOCKS5 路由中转")
 	}
+	if relay.RouteMode == routeModeSocks5Route {
+		if relay.LandingMode == "" {
+			if relay.LandingNodeID != "" {
+				relay.LandingMode = "panel_node"
+			} else {
+				relay.LandingMode = "manual_socks5"
+			}
+		}
+		switch relay.LandingMode {
+		case "panel_node", "manual_socks5":
+		default:
+			return fmt.Errorf("SOCKS5 落地方式只支持本面板入站或手动填写远程 SOCKS5")
+		}
+	}
 	if relay.RelayServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
 		relay.RelayServerID = r.defaultServerIDLocked()
+	}
+	if err := r.store.ValidateRelayParentsLocked(*relay); err != nil {
+		return err
 	}
 	srv, ok := r.store.Data.Servers[relay.RelayServerID]
 	if !ok {
@@ -185,13 +271,6 @@ func (r *Router) normalizeRelayLocked(relay *model.RelayRoute, currentID string)
 			return fmt.Errorf("当前落地节点为 VLESS Reality TCP，不支持 UDP-only 中转；请改用 TCP。TCP+UDP 仅作为实验模式，不建议正式使用")
 		}
 	case routeModeSocks5Route:
-		if relay.LandingMode == "" {
-			if relay.LandingNodeID != "" {
-				relay.LandingMode = "panel_node"
-			} else {
-				relay.LandingMode = "manual_socks5"
-			}
-		}
 		switch relay.LandingMode {
 		case "panel_node":
 			if relay.LandingNodeID == "" {
@@ -218,8 +297,6 @@ func (r *Router) normalizeRelayLocked(relay *model.RelayRoute, currentID string)
 			if relay.ManualSocksUsername == "" || relay.ManualSocksPassword == "" {
 				return fmt.Errorf("远程落地 SOCKS5 必须填写账号和密码")
 			}
-		default:
-			return fmt.Errorf("SOCKS5 落地方式只支持本面板入站或手动填写远程 SOCKS5")
 		}
 		relay.RelayNetwork = "tcp"
 		if relay.RelayRealityDest == "" {

@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -52,32 +55,23 @@ func (s *Store) loadOrInit() error {
 		return err
 	}
 	if len(raw) == 0 {
-		s.Data = newData()
-		if err := s.seedDefaultAdmin(); err != nil {
-			return err
-		}
-		if err := s.seedLocalServer(); err != nil {
-			return err
-		}
-		return s.SaveLocked()
+		return errors.New("existing panel data file is empty; restore a backup before starting")
 	}
-	if err := json.Unmarshal(raw, &s.Data); err != nil {
+	var data *model.PanelData
+	if err := json.Unmarshal(raw, &data); err != nil {
 		return err
 	}
+	if data == nil {
+		return errors.New("existing panel data must be a JSON object; restore a backup before starting")
+	}
+	s.Data = *data
 	normalize(&s.Data)
-	changed, err := s.ensureSingleModeLocalServer()
-	if err != nil {
-		return err
-	}
-	if changed {
-		return s.SaveLocked()
-	}
 	return nil
 }
 
 func newData() model.PanelData {
 	return model.PanelData{
-		Version:       "0.7.7.1-clash-import-polish-agent-xray",
+		Version:       "0.7.7.6-bbr-optimization-agent-xray",
 		Admins:        map[string]model.AdminUser{},
 		Servers:       map[string]model.Server{},
 		Nodes:         map[string]model.Node{},
@@ -124,7 +118,7 @@ func normalize(d *model.PanelData) {
 			}
 		}
 	}
-	d.Version = "0.7.7.1-clash-import-polish-agent-xray"
+	d.Version = "0.7.7.6-bbr-optimization-agent-xray"
 }
 
 func defaultNetworkPolicy() model.NetworkPolicy {
@@ -173,16 +167,121 @@ func normalizeNetworkPolicy(p *model.NetworkPolicy) {
 }
 
 func (s *Store) SaveLocked() error {
-	normalize(&s.Data)
-	raw, err := json.MarshalIndent(s.Data, "", "  ")
+	return s.commitLocked(clonePanelData(s.Data))
+}
+
+// Caller holds Mu.Lock through validation and this commit.
+func (s *Store) SaveServerLocked(id string, server model.Server, actor, action, ip, detail string) error {
+	if id == "" || server.ID != id {
+		return errors.New("server identity mismatch")
+	}
+	if current, exists := s.Data.Servers[id]; exists && current.ID != id {
+		return errors.New("stored server identity mismatch")
+	}
+	next := clonePanelData(s.Data)
+	if next.Servers == nil {
+		next.Servers = make(map[string]model.Server)
+	}
+	next.Servers[id] = cloneServer(server)
+	if action != "" {
+		addLog(&next, actor, action, ip, detail)
+	}
+	return s.commitLocked(next)
+}
+
+func (s *Store) commitLocked(next model.PanelData) error {
+	normalize(&next)
+	raw, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.Path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+	if err := writePanelData(s.Path, raw, osPanelFiles{}); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.Path)
+	s.Data = next
+	return nil
+}
+
+func cloneServer(server model.Server) model.Server {
+	server.BBRStatus.AvailableCongestionControl = slices.Clone(server.BBRStatus.AvailableCongestionControl)
+	if server.BBRPendingAction != nil {
+		action := *server.BBRPendingAction
+		server.BBRPendingAction = &action
+	}
+	return server
+}
+
+func clonePanelData(data model.PanelData) model.PanelData {
+	data.Admins = maps.Clone(data.Admins)
+	data.Servers = maps.Clone(data.Servers)
+	for id, server := range data.Servers {
+		data.Servers[id] = cloneServer(server)
+	}
+	data.Nodes = maps.Clone(data.Nodes)
+	data.Clients = maps.Clone(data.Clients)
+	for id, client := range data.Clients {
+		client.NodeIDs = slices.Clone(client.NodeIDs)
+		client.RelayRouteIDs = slices.Clone(client.RelayRouteIDs)
+		data.Clients[id] = client
+	}
+	data.RelayRoutes = maps.Clone(data.RelayRoutes)
+	data.LandingExits = maps.Clone(data.LandingExits)
+	data.OperationLogs = maps.Clone(data.OperationLogs)
+	data.NetworkPolicy.DNSServers = slices.Clone(data.NetworkPolicy.DNSServers)
+	data.NetworkPolicyBackup.DNSServers = slices.Clone(data.NetworkPolicyBackup.DNSServers)
+	return data
+}
+
+type stagedPanelFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
+type panelFiles interface {
+	CreateTemp(string, string) (stagedPanelFile, error)
+	Rename(string, string) error
+}
+
+type osPanelFiles struct{}
+
+func (osPanelFiles) CreateTemp(dir, pattern string) (stagedPanelFile, error) {
+	return os.CreateTemp(dir, pattern)
+}
+
+func (osPanelFiles) Rename(from, to string) error { return os.Rename(from, to) }
+
+func closePanelFile(file stagedPanelFile, cause error) error {
+	if err := file.Close(); err != nil {
+		return errors.Join(cause, fmt.Errorf("close temporary panel data: %w", err))
+	}
+	return cause
+}
+
+func writePanelData(path string, raw []byte, files panelFiles) error {
+	file, err := files.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary panel data: %w", err)
+	}
+	// Failed temporary files are retained with restricted permissions as evidence.
+	written, err := file.Write(raw)
+	if err == nil && written != len(raw) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return closePanelFile(file, fmt.Errorf("write temporary panel data: %w", err))
+	}
+	if err := file.Sync(); err != nil {
+		return closePanelFile(file, fmt.Errorf("sync temporary panel data: %w", err))
+	}
+	if err := closePanelFile(file, nil); err != nil {
+		return err
+	}
+	if err := files.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace panel data: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) seedDefaultAdmin() error {
@@ -211,131 +310,6 @@ func (s *Store) seedLocalServer() error {
 	s.Data.Servers[serverID] = model.Server{
 		ID: serverID, Name: name, IP: ip, Host: host, Region: region, Provider: provider,
 		Status: "offline", AgentToken: NewToken(), CreatedAt: now, UpdatedAt: now,
-	}
-	return nil
-}
-
-func (s *Store) ensureSingleModeLocalServer() (bool, error) {
-	if len(s.Data.Servers) == 0 {
-		return true, s.seedLocalServer()
-	}
-	localIP := getenv("ZXY_LOCAL_SERVER_IP", "127.0.0.1")
-	localHost := getenv("ZXY_LOCAL_SERVER_HOST", localIP)
-	localName := getenv("ZXY_LOCAL_SERVER_NAME", "本机服务器")
-	localRegion := getenv("ZXY_LOCAL_SERVER_REGION", "Local")
-	localProvider := getenv("ZXY_LOCAL_SERVER_PROVIDER", "Self-hosted")
-
-	// V0.5.8：从 V0.4.x / V0.5.0 升级到单机模式时，旧数据里可能已经存在同 IP 服务器。
-	// 这里自动选择一台作为“本机服务器”，把同 IP/Host 的重复服务器合并，避免后台出现多个本机、Agent 版本报警、入站绑定旧 server_id。
-	candidates := []model.Server{}
-	for _, srv := range s.Data.Servers {
-		if sameServerEndpoint(srv, localIP, localHost) || len(s.Data.Servers) == 1 {
-			candidates = append(candidates, srv)
-		}
-	}
-	if len(candidates) == 0 {
-		return true, s.seedLocalServer()
-	}
-	keep := pickLocalServer(candidates)
-	changed := false
-	if keep.Name == "" || keep.Name == keep.IP || keep.Name == keep.Host {
-		keep.Name = localName
-		changed = true
-	}
-	// V0.5.8：如果升级后本机服务器还显示 127.0.0.1/localhost，而安装脚本已经识别到公网 IP，
-	// 自动把展示 IP/Host 修正为公网入口，避免后台看起来像只能本机访问。
-	if keep.IP == "" || shouldReplaceLocalEndpoint(keep.IP, localIP) {
-		keep.IP = localIP
-		changed = true
-	}
-	if keep.Host == "" || shouldReplaceLocalEndpoint(keep.Host, localHost) {
-		keep.Host = localHost
-		changed = true
-	}
-	if keep.Region == "" {
-		keep.Region = localRegion
-		changed = true
-	}
-	if keep.Provider == "" {
-		keep.Provider = localProvider
-		changed = true
-	}
-	if keep.AgentToken == "" {
-		keep.AgentToken = NewToken()
-		changed = true
-	}
-	if keep.UpdatedAt.IsZero() {
-		keep.UpdatedAt = time.Now()
-		changed = true
-	}
-	s.Data.Servers[keep.ID] = keep
-
-	for _, srv := range candidates {
-		if srv.ID == keep.ID {
-			continue
-		}
-		for id, n := range s.Data.Nodes {
-			if n.ServerID == srv.ID {
-				n.ServerID = keep.ID
-				n.UpdatedAt = time.Now()
-				s.Data.Nodes[id] = n
-			}
-		}
-		delete(s.Data.Servers, srv.ID)
-		changed = true
-	}
-	return changed, nil
-}
-
-func sameServerEndpoint(srv model.Server, localIP, localHost string) bool {
-	return (localIP != "" && (srv.IP == localIP || srv.Host == localIP)) || (localHost != "" && (srv.IP == localHost || srv.Host == localHost)) ||
-		(isLoopbackEndpoint(srv.IP) && !isLoopbackEndpoint(localIP)) || (isLoopbackEndpoint(srv.Host) && !isLoopbackEndpoint(localHost))
-}
-
-func isLoopbackEndpoint(v string) bool {
-	switch v {
-	case "127.0.0.1", "localhost", "::1", "0.0.0.0":
-		return true
-	default:
-		return false
-	}
-}
-
-func shouldReplaceLocalEndpoint(current, target string) bool {
-	return target != "" && !isLoopbackEndpoint(target) && isLoopbackEndpoint(current)
-}
-
-func pickLocalServer(list []model.Server) model.Server {
-	keep := list[0]
-	for _, srv := range list[1:] {
-		if srv.AgentVersion == "0.7.7.1-clash-import-polish-agent-xray" && keep.AgentVersion != "0.7.7.1-clash-import-polish-agent-xray" {
-			keep = srv
-			continue
-		}
-		if srv.Status == "online" && keep.Status != "online" {
-			keep = srv
-			continue
-		}
-		if srv.LastSyncAt.After(keep.LastSyncAt) {
-			keep = srv
-			continue
-		}
-		if keep.LastSyncAt.IsZero() && srv.CreatedAt.After(keep.CreatedAt) {
-			keep = srv
-		}
-	}
-	return keep
-}
-
-// EnsureSingleModeLocalServerLocked makes sure the single-node local server exists.
-// Caller must hold s.Mu.Lock().
-func (s *Store) EnsureSingleModeLocalServerLocked() error {
-	changed, err := s.ensureSingleModeLocalServer()
-	if err != nil {
-		return err
-	}
-	if changed {
-		return s.SaveLocked()
 	}
 	return nil
 }
@@ -372,8 +346,15 @@ func (s *Store) UpdateAdminLogin(id, ip string) {
 }
 
 func (s *Store) AddLog(actor, action, ip, detail string) {
+	addLog(&s.Data, actor, action, ip, detail)
+}
+
+func addLog(data *model.PanelData, actor, action, ip, detail string) {
+	if data.OperationLogs == nil {
+		data.OperationLogs = make(map[string]model.OperationLog)
+	}
 	id := NewID("log")
-	s.Data.OperationLogs[id] = model.OperationLog{ID: id, Actor: actor, Action: action, IP: ip, Detail: detail, CreatedAt: time.Now()}
+	data.OperationLogs[id] = model.OperationLog{ID: id, Actor: actor, Action: action, IP: ip, Detail: detail, CreatedAt: time.Now()}
 }
 
 func NewID(prefix string) string {

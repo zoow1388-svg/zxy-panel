@@ -2,8 +2,11 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,8 +26,8 @@ func (r *Router) clients(w http.ResponseWriter, req *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodPost:
-		var body model.Client
-		if err := readJSON(req, &body); err != nil {
+		body, err := readClientBindings(req, nil)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
@@ -43,12 +46,13 @@ func (r *Router) clients(w http.ResponseWriter, req *http.Request) {
 		r.store.Mu.Lock()
 		defer r.store.Mu.Unlock()
 		if err := r.validateClientLocked(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeBindingValidationError(w, err)
 			return
 		}
-		r.store.Data.Clients[body.ID] = body
-		r.store.AddLog(currentClaims(req).Username, "client.create", clientIP(req), body.Username)
-		_ = r.store.SaveLocked()
+		if err := r.store.CreateClientLocked(body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusCreated, body)
 	default:
 		methodNotAllowed(w)
@@ -98,8 +102,12 @@ func (r *Router) clientByID(w http.ResponseWriter, req *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodPut:
-		var body model.Client
-		if err := readJSON(req, &body); err != nil {
+		if _, err := r.store.ClientLocked(id); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
+		body, err := readClientBindings(req, &item)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
@@ -113,21 +121,70 @@ func (r *Router) clientByID(w http.ResponseWriter, req *http.Request) {
 		}
 		body.UpdatedAt = time.Now()
 		if err := r.validateClientLocked(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeBindingValidationError(w, err)
 			return
 		}
-		r.store.Data.Clients[id] = body
-		r.store.AddLog(currentClaims(req).Username, "client.update", clientIP(req), id)
-		_ = r.store.SaveLocked()
+		if err := r.store.UpdateClientLocked(id, body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, body)
 	case http.MethodDelete:
-		delete(r.store.Data.Clients, id)
-		r.store.AddLog(currentClaims(req).Username, "client.delete", clientIP(req), id)
-		_ = r.store.SaveLocked()
+		if err := r.store.DeleteClientLocked(id, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeBindingMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func readClientBindings(req *http.Request, current *model.Client) (model.Client, error) {
+	var fields map[string]json.RawMessage
+	if err := readJSON(req, &fields); err != nil || fields == nil {
+		return model.Client{}, errors.New("invalid json object")
+	}
+	bindings := map[string][]string{"node_ids": nil, "relay_route_ids": nil}
+	if current != nil {
+		bindings["node_ids"] = slices.Clone(current.NodeIDs)
+		bindings["relay_route_ids"] = slices.Clone(current.RelayRouteIDs)
+	}
+	for name := range bindings {
+		provided := false
+		for key, value := range fields {
+			if !strings.EqualFold(key, name) {
+				continue
+			}
+			if provided || !strings.HasPrefix(strings.TrimSpace(string(value)), "[") {
+				return model.Client{}, errors.New("binding must be a string array")
+			}
+			provided = true
+			var elements []json.RawMessage
+			if err := json.Unmarshal(value, &elements); err != nil {
+				return model.Client{}, err
+			}
+			ids := make([]string, 0, len(elements))
+			for _, element := range elements {
+				var id string
+				if strings.TrimSpace(string(element)) == "null" || json.Unmarshal(element, &id) != nil || strings.TrimSpace(id) == "" {
+					return model.Client{}, errors.New("binding IDs must be non-empty strings")
+				}
+				ids = append(ids, strings.TrimSpace(id))
+			}
+			bindings[name] = ids
+		}
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return model.Client{}, err
+	}
+	var body model.Client
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return model.Client{}, err
+	}
+	body.NodeIDs, body.RelayRouteIDs = bindings["node_ids"], bindings["relay_route_ids"]
+	return body, nil
 }
 
 func (r *Router) validateClientLocked(c *model.Client) error {
@@ -135,6 +192,9 @@ func (r *Router) validateClientLocked(c *model.Client) error {
 	c.Email = strings.TrimSpace(c.Email)
 	if c.Username == "" {
 		return fmt.Errorf("请填写客户名")
+	}
+	if err := r.store.ValidateClientBindingsLocked(*c); err != nil {
+		return err
 	}
 	clean := make([]string, 0, len(c.NodeIDs))
 	seen := map[string]bool{}
@@ -226,15 +286,18 @@ func (r *Router) createClientWithSocks5Relay(w http.ResponseWriter, req *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "落地出口不存在或未启用"})
 		return
 	}
-	if body.RelayServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
-		body.RelayServerID = r.defaultServerIDLocked()
-	}
-	srv, ok := r.store.Data.Servers[body.RelayServerID]
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "中转服务器不存在"})
+	if exit.ID != body.LandingExitID {
+		writeBindingMutationError(w, &store.BindingConflictError{Conflicts: []store.BindingConflict{{Kind: "landing_exit_identity", Message: "Landing exit ID does not match its map key."}}})
 		return
 	}
+	if body.RelayServerID == "" {
+		body.RelayServerID = r.defaultServerIDLocked()
+	}
+	if err := r.store.ValidateRelayParentsLocked(model.RelayRoute{RelayServerID: body.RelayServerID, RouteMode: routeModeSocks5Route, LandingMode: "manual_socks5"}); err != nil {
+		writeBindingValidationError(w, err)
+		return
+	}
+	srv := r.store.Data.Servers[body.RelayServerID]
 	if body.RelayHost == "" {
 		if srv.Host != "" {
 			body.RelayHost = srv.Host
@@ -299,9 +362,9 @@ func (r *Router) createClientWithSocks5Relay(w http.ResponseWriter, req *http.Re
 		Remark: strings.TrimSpace(body.Remark), Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	client.RelayRouteIDs = []string{relay.ID}
-	r.store.Data.RelayRoutes[relay.ID] = relay
-	r.store.Data.Clients[client.ID] = client
-	r.store.AddLog(currentClaims(req).Username, "client.create_relay", clientIP(req), fmt.Sprintf("%s -> %s:%d", client.Username, exit.Host, exit.Port))
-	_ = r.store.SaveLocked()
+	if err := r.store.CreateClientRelayLocked(client, relay, currentClaims(req).Username, clientIP(req), fmt.Sprintf("%s -> %s:%d", client.Username, exit.Host, exit.Port)); err != nil {
+		writeBindingMutationError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, createClientRelayResponse{Client: client, Relay: relay, Exit: exit})
 }

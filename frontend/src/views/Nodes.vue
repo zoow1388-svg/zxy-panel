@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, ApiError, formatMutationError } from '../api'
 import { copyText } from '../clipboard'
 import { buildClientShare, clientsForNode, isQrShareFormat, qrImageUrl, shareFormatLabel, shareFormatOptions, type ShareFormat } from '../share'
 
@@ -75,6 +75,13 @@ const modeTip = computed(() => {
 function normalizeApiError(e:any) {
   try { const data = JSON.parse(e.message); return data.error || e.message } catch { return e?.message || '操作失败' }
 }
+function showMutationError(e:unknown) {
+  error.value = formatMutationError(e)
+  if (showEditor.value && !(e instanceof ApiError && e.status === 401)) alert(error.value)
+}
+async function refreshAfterMutation() {
+  if (!await load()) error.value = `写操作已完成，但页面刷新失败，请手动刷新核对。${error.value}`
+}
 function fillFromServer() {
   const s = selectedServer.value
   if (!s) return
@@ -108,20 +115,21 @@ async function load() {
     }
     if (mode.value === 'recommended') await ensureRealityKeys(false)
     updateShareLink()
-  } catch(e:any) { error.value = normalizeApiError(e) }
+    return true
+  } catch(e:any) { error.value = normalizeApiError(e); return false }
 }
 
-async function ensureRealityKeys(force = false) {
-  if (form.value.security !== 'reality') return
-  if (!force && form.value.reality_private_key && form.value.reality_public_key && form.value.reality_short_id) return
+async function ensureRealityKeys(force = false, target = form.value) {
+  if (target.security !== 'reality') return
+  if (!force && target.reality_private_key && target.reality_public_key && target.reality_short_id) return
   const res = await api('/api/nodes/reality-keys', { method: 'POST' })
-  form.value.reality_private_key = res.private_key
-  form.value.reality_public_key = res.public_key
-  form.value.reality_short_id = res.short_id
-  form.value.reality_spider_x = res.spider_x || '/'
-  form.value.fingerprint = res.fingerprint || 'chrome'
-  if (!form.value.reality_dest) form.value.reality_dest = res.dest || 'www.intel.com:443'
-  if (!form.value.sni) form.value.sni = res.sni || 'www.intel.com'
+  target.reality_private_key = res.private_key
+  target.reality_public_key = res.public_key
+  target.reality_short_id = res.short_id
+  target.reality_spider_x = res.spider_x || '/'
+  target.fingerprint = res.fingerprint || 'chrome'
+  if (!target.reality_dest) target.reality_dest = res.dest || 'www.intel.com:443'
+  if (!target.sni) target.sni = res.sni || 'www.intel.com'
 }
 
 function applyPreset(p:any) {
@@ -196,25 +204,33 @@ function resetForm() {
   applyRecommended(true)
 }
 async function saveNode() {
+  if (saving.value) return
   error.value = ''; message.value = ''
   const err = validateLocal()
   if (err) { error.value = err; return }
+  const submittedId = editingId.value
+  const submittedForm = { ...form.value }
   saving.value = true
   try {
-    if (form.value.protocol !== 'socks' && form.value.security === 'reality') await ensureRealityKeys(false)
-    const payload = { ...form.value, port: Number(form.value.port) }
-    if (payload.transport === 'tcp') payload.path = ''
-    if (editingId.value) {
-      await api(`/api/nodes/${editingId.value}`, { method:'PUT', body:JSON.stringify(payload) })
-      message.value = form.value.protocol === 'socks' ? 'SOCKS5 入站已保存。Agent 同步后会下发到对应落地服务器。' : '入站已保存。Reality/订阅配置会在 Agent 下一次同步时更新。'
-    } else {
-      await api('/api/nodes', { method:'POST', body:JSON.stringify(payload) })
-      message.value = form.value.protocol === 'socks' ? 'SOCKS5 落地入站已新增。请放行端口，并建议只允许中转服务器 IP 访问。' : '入站已新增。推荐模式会自动生成 Reality 客户端链接参数。'
+    try {
+      if (submittedForm.protocol !== 'socks' && submittedForm.security === 'reality') await ensureRealityKeys(false, submittedForm)
+      const payload = { ...submittedForm, port: Number(submittedForm.port) }
+      if (payload.transport === 'tcp') payload.path = ''
+      if (submittedId) {
+        await api(`/api/nodes/${submittedId}`, { method:'PUT', body:JSON.stringify(payload) })
+        message.value = submittedForm.protocol === 'socks' ? 'SOCKS5 入站已保存。Agent 同步后会下发到对应落地服务器。' : '入站已保存。Reality/订阅配置会在 Agent 下一次同步时更新。'
+      } else {
+        await api('/api/nodes', { method:'POST', body:JSON.stringify(payload) })
+        message.value = submittedForm.protocol === 'socks' ? 'SOCKS5 落地入站已新增。请放行端口，并建议只允许中转服务器 IP 访问。' : '入站已新增。推荐模式会自动生成 Reality 客户端链接参数。'
+      }
+    } catch(e:unknown) {
+      showMutationError(e)
+      return
     }
     resetForm()
-    await load()
+    await refreshAfterMutation()
     showEditor.value = false
-  } catch(e:any) { error.value = normalizeApiError(e) } finally { saving.value = false }
+  } finally { saving.value = false }
 }
 function editNode(n:any) {
   showEditor.value = true
@@ -246,15 +262,15 @@ function editNode(n:any) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 async function remove(id:string) {
-  if(!confirm('确认删除这个入站？删除后，客户订阅里也会移除这个入站。')) return
+  if(!confirm('确认删除这个入站？如果仍被客户或中转线路引用，系统会拒绝删除，不会自动解除绑定。')) return
   error.value = ''; message.value = ''
   try {
     await api(`/api/nodes/${id}`,{method:'DELETE'})
-    if (editingId.value === id) resetForm()
-    if (shareNodeData.value?.id === id) closeShare()
-    message.value = '入站已删除。'
-    await load()
-  } catch(e:any) { error.value = normalizeApiError(e) }
+  } catch(e:unknown) { showMutationError(e); return }
+  if (editingId.value === id) resetForm()
+  if (shareNodeData.value?.id === id) closeShare()
+  message.value = '入站已删除。'
+  await refreshAfterMutation()
 }
 async function preview(id:string) {
   error.value = ''; message.value = ''
@@ -327,7 +343,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">入站管理</h1>
-      <p class="page-desc">V0.7.7.1 入站管理清理版：协议下拉选择 VLESS 或 SOCKS5，快捷模板只负责填默认参数。</p>
+      <p class="page-desc">V0.7.8 入站管理稳定版：协议下拉选择 VLESS 或 SOCKS5，快捷模板只负责填默认参数。</p>
     </div>
   </div>
 
@@ -338,7 +354,7 @@ onMounted(load)
     <div class="section-head">
       <div><h2>入站列表</h2><p>先看已有入站，新增或编辑时再展开配置表单，避免创建后找不到结果。</p></div>
       <div class="row-actions">
-        <button class="btn" @click="resetForm(); showEditor = true">新增入站</button>
+        <button class="btn" :disabled="saving" @click="resetForm(); showEditor = true">新增入站</button>
         <button class="btn secondary" @click="load">刷新</button>
       </div>
     </div>
@@ -352,21 +368,21 @@ onMounted(load)
         <td>{{ n.host }}</td><td>{{ n.port }}<br><span v-if="Number(n.port) < 10000" class="muted danger-text">低端口风险</span><span v-else class="muted">推荐端口</span></td><td>{{ n.transport }}</td>
         <td><span class="badge" :class="n.security==='reality'?'online':''">{{ String(n.protocol || '').toLowerCase() === 'socks' ? (n.socks_udp ? 'UDP开' : 'UDP关') : n.security }}</span><br><span v-if="n.security==='reality'" class="muted">{{ n.sni }}</span></td>
         <td><span class="badge" :class="n.enabled?'online':''">{{ n.enabled ? '启用' : '停用' }}</span></td>
-        <td class="row-actions"><button class="btn secondary" @click="String(n.protocol || '').toLowerCase() === 'socks' ? openSocksInfo(n) : openShare(n)">{{ String(n.protocol || '').toLowerCase() === 'socks' ? '落地出口' : '链接/二维码' }}</button><button class="btn secondary" @click="editNode(n)">编辑</button><button class="btn secondary" @click="preview(n.id)">配置预览</button><button class="btn danger" @click="remove(n.id)">删除</button></td>
+        <td class="row-actions"><button class="btn secondary" @click="String(n.protocol || '').toLowerCase() === 'socks' ? openSocksInfo(n) : openShare(n)">{{ String(n.protocol || '').toLowerCase() === 'socks' ? '落地出口' : '链接/二维码' }}</button><button class="btn secondary" :disabled="saving" @click="editNode(n)">编辑</button><button class="btn secondary" @click="preview(n.id)">配置预览</button><button class="btn danger" @click="remove(n.id)">删除</button></td>
       </tr>
     </tbody></table>
     </div>
   </div>
 
-  <div v-if="showEditor" class="modal-mask" @click.self="showEditor = false">
-    <div class="modal-card node-editor-modal node-editor">
+  <div v-if="showEditor" class="modal-mask" @click.self="!saving && (showEditor = false)">
+    <div class="modal-card node-editor-modal node-editor" :inert="saving">
       <div class="modal-head">
         <div>
           <span class="eyebrow">入站配置</span>
           <h2>{{ editingId ? '编辑入站' : '新增入站' }}</h2>
           <p>先选择协议，再选择快捷模板。客户节点推荐 VLESS Reality；落地出口协议选择 SOCKS5。</p>
         </div>
-        <button class="icon-btn" @click="showEditor = false">×</button>
+        <button class="icon-btn" :disabled="saving" @click="showEditor = false">×</button>
       </div>
     <div class="mode-tabs">
       <button class="mode-tab" :class="{active:mode==='recommended'}" @click="setMode('recommended')"><strong>推荐模板</strong><span>VLESS / Reality / TCP</span></button>
@@ -418,7 +434,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="actions editor-actions"><button class="btn" @click="saveNode" :disabled="saving">{{ editingId ? '保存修改' : '新增入站' }}</button><button v-if="editingId" class="btn secondary" @click="resetForm">取消编辑</button><button class="btn secondary" @click="showEditor = false">关闭</button></div>
+    <div class="actions editor-actions"><button class="btn" @click="saveNode" :disabled="saving">{{ editingId ? '保存修改' : '新增入站' }}</button><button v-if="editingId" class="btn secondary" :disabled="saving" @click="resetForm">取消编辑</button><button class="btn secondary" :disabled="saving" @click="showEditor = false">关闭</button></div>
     </div>
   </div>
 

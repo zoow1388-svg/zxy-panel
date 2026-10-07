@@ -2,7 +2,10 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -15,9 +18,8 @@ import (
 func (r *Router) nodes(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodGet:
-		r.store.Mu.Lock()
-		defer r.store.Mu.Unlock()
-		_ = r.store.EnsureSingleModeLocalServerLocked()
+		r.store.Mu.RLock()
+		defer r.store.Mu.RUnlock()
 		list := make([]model.Node, 0, len(r.store.Data.Nodes))
 		for _, item := range r.store.Data.Nodes {
 			list = append(list, item)
@@ -31,18 +33,19 @@ func (r *Router) nodes(w http.ResponseWriter, req *http.Request) {
 		}
 		r.store.Mu.Lock()
 		defer r.store.Mu.Unlock()
+		body.Enabled = true
 		if err := r.normalizeNodeLocked(&body, ""); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		now := time.Now()
 		body.ID = store.NewID("node")
-		body.Enabled = true
 		body.CreatedAt = now
 		body.UpdatedAt = now
-		r.store.Data.Nodes[body.ID] = body
-		r.store.AddLog(currentClaims(req).Username, "node.create", clientIP(req), body.Name)
-		_ = r.store.SaveLocked()
+		if err := r.store.CreateNodeLocked(body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeNodeMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusCreated, body)
 	default:
 		methodNotAllowed(w)
@@ -95,9 +98,39 @@ func (r *Router) nodeByID(w http.ResponseWriter, req *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodPut:
-		var body model.Node
-		if err := readJSON(req, &body); err != nil {
+		var fields map[string]json.RawMessage
+		if err := readJSON(req, &fields); err != nil || fields == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json object"})
+			return
+		}
+		serverID := item.ServerID
+		serverProvided := false
+		for key, value := range fields {
+			if !strings.EqualFold(key, "server_id") {
+				continue
+			}
+			if serverProvided || strings.TrimSpace(string(value)) == "null" || json.Unmarshal(value, &serverID) != nil || strings.TrimSpace(serverID) == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_id must be a non-empty string and provided at most once"})
+				return
+			}
+			serverProvided = true
+		}
+		raw, err := json.Marshal(fields)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		var body model.Node
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		body.ServerID = strings.TrimSpace(serverID)
+		if body.ServerID == "" {
+			writeNodeMutationError(w, &store.NodeConflictError{Conflicts: []store.NodeConflict{{
+				Kind: "node_server_invalid", ResourceID: id,
+				Message: "The current node has no server; no server was selected automatically.",
+			}}})
 			return
 		}
 		if err := r.normalizeNodeLocked(&body, id); err != nil {
@@ -107,28 +140,32 @@ func (r *Router) nodeByID(w http.ResponseWriter, req *http.Request) {
 		body.ID = id
 		body.CreatedAt = item.CreatedAt
 		body.UpdatedAt = time.Now()
-		r.store.Data.Nodes[id] = body
-		r.store.AddLog(currentClaims(req).Username, "node.update", clientIP(req), id)
-		_ = r.store.SaveLocked()
+		if err := r.store.UpdateNodeLocked(id, body, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeNodeMutationError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, body)
 	case http.MethodDelete:
-		delete(r.store.Data.Nodes, id)
-		// 从客户绑定列表中同步移除，避免订阅里残留不存在的节点。
-		for cid, c := range r.store.Data.Clients {
-			next := make([]string, 0, len(c.NodeIDs))
-			for _, nid := range c.NodeIDs {
-				if nid != id {
-					next = append(next, nid)
-				}
-			}
-			c.NodeIDs = next
-			r.store.Data.Clients[cid] = c
+		if err := r.store.DeleteNodeLocked(id, currentClaims(req).Username, clientIP(req)); err != nil {
+			writeNodeMutationError(w, err)
+			return
 		}
-		r.store.AddLog(currentClaims(req).Username, "node.delete", clientIP(req), id)
-		_ = r.store.SaveLocked()
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		methodNotAllowed(w)
+	}
+}
+
+func writeNodeMutationError(w http.ResponseWriter, err error) {
+	var conflict *store.NodeConflictError
+	switch {
+	case errors.Is(err, store.ErrNodeNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	case errors.As(err, &conflict):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": conflict.Error(), "conflicts": conflict.Conflicts})
+	default:
+		log.Printf("failed to persist node mutation: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save node mutation; no changes committed."})
 	}
 }
 
@@ -175,7 +212,6 @@ func (r *Router) normalizeNodeLocked(n *model.Node, currentID string) error {
 	n.Remark = strings.TrimSpace(n.Remark)
 
 	if n.ServerID == "" {
-		_ = r.store.EnsureSingleModeLocalServerLocked()
 		n.ServerID = r.defaultServerIDLocked()
 	}
 	if n.ServerID == "" {

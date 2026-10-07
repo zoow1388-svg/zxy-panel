@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { copyText } from '../clipboard'
 const servers = ref<any[]>([])
 const form = ref<any>({ name:'', ip:'', host:'', region:'US', provider:'' })
 const error = ref('')
 const message = ref('')
 const selectedInstall = ref('')
-const PACKAGE_NAME = 'zxy-panel-v0.7.7.1-clash-import-polish.zip'
-const PACKAGE_DIR = 'zxy-panel-v0.7.7.1-clash-import-polish'
+const PACKAGE_NAME = 'zxy-panel-v0.7.8-stable-engineering.zip'
+const PACKAGE_DIR = 'zxy-panel-v0.7.8-stable-engineering'
 
 function publicPanelBase() {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
@@ -25,7 +25,20 @@ async function createServer() {
     await load()
   } catch(e:any){ error.value=e.message }
 }
-async function remove(id:string) { if(!confirm('确认删除这台服务器？')) return; await api(`/api/servers/${id}`,{method:'DELETE'}); await load() }
+async function remove(id:string) {
+  if(!confirm('确认删除这台服务器？')) return
+  error.value=''; message.value=''
+  try {
+    await api(`/api/servers/${id}`,{method:'DELETE'})
+  } catch(e) {
+    if(e instanceof ApiError && e.status===409) {
+      error.value=e.message
+      return
+    }
+    throw e
+  }
+  await load()
+}
 function fmtBytes(v:number) { if(!v) return '0 B'; const units=['B','KB','MB','GB','TB']; let n=v, i=0; while(n>=1024&&i<units.length-1){n/=1024;i++}; return `${n.toFixed(i?2:0)} ${units[i]}` }
 function installCommand(s:any) {
   const base = publicPanelBase()
@@ -47,7 +60,7 @@ onMounted(load)
   <div class="page-head">
     <div>
       <h1 class="page-title">高级：服务器管理</h1>
-      <p class="page-desc">V0.7.7.1 多服务器模式：本机服务器可作为主控/落地服务器，远程服务器复制一键命令后只安装 Agent 接入。</p>
+      <p class="page-desc">V0.7.8 多服务器模式：本机服务器可作为主控/落地服务器，远程服务器复制一键命令后只安装 Agent 接入。</p>
     </div>
   </div>
   <div class="form">

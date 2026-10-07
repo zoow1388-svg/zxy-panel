@@ -15,6 +15,7 @@ const mainNav = [
   { to: '/clients', label: '客户管理', icon: '◉', desc: '订阅与二维码' },
 ]
 const opsNav = [
+  { to: '/server-optimization', label: '服务器优化', icon: 'O', desc: 'BBR 网络加速' },
   { to: '/diagnostics', label: '节点体检', icon: '✓', desc: '一键诊断' },
   { to: '/logs', label: '系统日志', icon: '≡', desc: '操作记录' },
   { to: '/settings', label: '系统设置', icon: '⚙', desc: '密码与安全' },

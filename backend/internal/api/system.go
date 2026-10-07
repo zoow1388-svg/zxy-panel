@@ -14,7 +14,7 @@ import (
 	"zxy-panel/backend/internal/xray"
 )
 
-const panelVersion = "0.7.7.1-clash-import-polish-agent-xray"
+const panelVersion = "0.7.8-stable-engineering"
 const installDir = "/opt/zxy-panel"
 
 type systemCheck struct {
@@ -194,7 +194,7 @@ func (r *Router) buildSystemChecks() ([]systemCheck, map[string]int) {
 		}
 	}
 	if loopbackServer {
-		checks = append(checks, systemCheck{Key: "public_endpoint", Label: "公网入口", Status: "warn", Message: "本机服务器仍显示 127.0.0.1/localhost，建议重新运行 V0.7.5 安装脚本修正公网 IP。"})
+		checks = append(checks, systemCheck{Key: "public_endpoint", Label: "公网入口", Status: "warn", Message: "本机服务器仍显示 127.0.0.1/localhost，建议重新运行 V0.7.8 安装脚本修正公网 IP。"})
 	} else if len(r.store.Data.Servers) > 0 {
 		checks = append(checks, systemCheck{Key: "public_endpoint", Label: "公网入口", Status: "ok", Message: "本机服务器已显示公网入口，后台展示更清晰。"})
 	}

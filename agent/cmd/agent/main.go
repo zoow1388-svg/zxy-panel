@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,20 +20,40 @@ import (
 	"time"
 )
 
-const version = "0.7.7.1-clash-import-polish-agent-xray"
+const version = "0.7.8-stable-engineering"
 
 type Heartbeat struct {
-	ServerID      string  `json:"server_id"`
-	Hostname      string  `json:"hostname"`
-	AgentVersion  string  `json:"agent_version"`
-	XrayVersion   string  `json:"xray_version"`
-	ConfigHash    string  `json:"config_hash"`
-	LastMessage   string  `json:"last_message"`
-	CPUUsage      float64 `json:"cpu_usage"`
-	MemoryUsage   float64 `json:"memory_usage"`
-	DiskUsage     float64 `json:"disk_usage"`
-	UploadTotal   int64   `json:"upload_total"`
-	DownloadTotal int64   `json:"download_total"`
+	ServerID              string     `json:"server_id"`
+	Hostname              string     `json:"hostname"`
+	AgentVersion          string     `json:"agent_version"`
+	XrayVersion           string     `json:"xray_version"`
+	ConfigHash            string     `json:"config_hash"`
+	LastMessage           string     `json:"last_message"`
+	CPUUsage              float64    `json:"cpu_usage"`
+	MemoryUsage           float64    `json:"memory_usage"`
+	DiskUsage             float64    `json:"disk_usage"`
+	UploadTotal           int64      `json:"upload_total"`
+	DownloadTotal         int64      `json:"download_total"`
+	BBRStatus             *BBRStatus `json:"bbr_status,omitempty"`
+	CompletedActionID     string     `json:"completed_action_id,omitempty"`
+	CompletedActionResult string     `json:"completed_action_result,omitempty"`
+}
+
+type BBRStatus struct {
+	Kernel                     string   `json:"kernel"`
+	Supported                  bool     `json:"supported"`
+	Enabled                    bool     `json:"enabled"`
+	CongestionControl          string   `json:"congestion_control"`
+	DefaultQdisc               string   `json:"default_qdisc"`
+	AvailableCongestionControl []string `json:"available_congestion_control"`
+	ModuleLoaded               bool     `json:"module_loaded"`
+	Message                    string   `json:"message"`
+	Error                      string   `json:"error,omitempty"`
+}
+
+type SystemAction struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
 }
 
 type SyncRequest struct {
@@ -49,6 +70,7 @@ type SyncResponse struct {
 	XrayConfig          map[string]any `json:"xray_config"`
 	NextIntervalSeconds int            `json:"next_interval_seconds"`
 	Message             string         `json:"message"`
+	SystemAction        *SystemAction  `json:"system_action,omitempty"`
 }
 
 type Config struct {
@@ -60,6 +82,7 @@ type Config struct {
 	ReloadCommand string
 	Interval      time.Duration
 	ApplyConfig   bool
+	NetoptBin     string
 }
 
 func main() {
@@ -72,6 +95,7 @@ func main() {
 		ReloadCommand: getenv("ZXY_XRAY_RELOAD_CMD", "systemctl restart xray"),
 		Interval:      time.Duration(getenvInt("ZXY_AGENT_INTERVAL_SECONDS", 30)) * time.Second,
 		ApplyConfig:   getenvBool("ZXY_APPLY_CONFIG", true),
+		NetoptBin:     getenv("ZXY_NETOPT_BIN", "/usr/local/bin/zxy-netopt"),
 	}
 	if cfg.ServerID == "" || cfg.AgentToken == "" {
 		log.Fatal("ZXY_SERVER_ID and ZXY_AGENT_TOKEN are required")
@@ -102,7 +126,17 @@ func main() {
 		} else {
 			lastMessage = "config already up to date"
 		}
-		hb := collectHeartbeat(cfg, hostname, hash, lastMessage)
+		bbrStatus := collectBBRStatus(cfg)
+		completedActionID := ""
+		completedActionResult := ""
+		if syncResp.SystemAction != nil {
+			bbrStatus, completedActionResult = runSystemAction(cfg, syncResp.SystemAction)
+			completedActionID = syncResp.SystemAction.ID
+			if completedActionResult != "" {
+				lastMessage = completedActionResult
+			}
+		}
+		hb := collectHeartbeat(cfg, hostname, hash, lastMessage, bbrStatus, completedActionID, completedActionResult)
 		if err := heartbeat(cfg, hb); err != nil {
 			log.Printf("heartbeat failed: %v", err)
 		}
@@ -188,12 +222,63 @@ func applyXrayConfig(cfg Config, syncResp SyncResponse) error {
 	return nil
 }
 
-func collectHeartbeat(cfg Config, hostname, hash, msg string) Heartbeat {
+func collectHeartbeat(cfg Config, hostname, hash, msg string, bbrStatus *BBRStatus, completedActionID, completedActionResult string) Heartbeat {
 	up, down := networkTotals()
 	return Heartbeat{
 		ServerID: cfg.ServerID, Hostname: hostname, AgentVersion: version, XrayVersion: xrayVersion(), ConfigHash: hash, LastMessage: msg,
 		CPUUsage: loadAverage(), MemoryUsage: memoryUsage(), DiskUsage: diskUsage("/"), UploadTotal: up, DownloadTotal: down,
+		BBRStatus: bbrStatus, CompletedActionID: completedActionID, CompletedActionResult: completedActionResult,
 	}
+}
+
+func collectBBRStatus(cfg Config) *BBRStatus {
+	return runNetopt(cfg, "bbr-status")
+}
+
+func runSystemAction(cfg Config, action *SystemAction) (*BBRStatus, string) {
+	if action == nil {
+		return collectBBRStatus(cfg), ""
+	}
+	allowed := map[string]bool{"bbr-status": true, "enable-bbr": true, "disable-bbr": true}
+	if !allowed[action.Action] {
+		return &BBRStatus{Error: "unsupported system action", Message: "unsupported system action"}, "unsupported system action"
+	}
+	status := runNetopt(cfg, action.Action)
+	message := status.Message
+	if status.Error != "" {
+		message = status.Error
+	}
+	return status, message
+}
+
+func runNetopt(cfg Config, action string) *BBRStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, cfg.NetoptBin, "--json", action)
+	out, err := cmd.CombinedOutput()
+	status := &BBRStatus{}
+	if len(out) > 0 {
+		if jsonErr := json.Unmarshal(out, status); jsonErr != nil {
+			status.Error = "invalid zxy-netopt response"
+			status.Message = strings.TrimSpace(string(out))
+			return status
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			status.Error = "zxy-netopt timed out"
+		} else if status.Message == "" {
+			status.Error = strings.TrimSpace(string(out))
+			if status.Error == "" {
+				status.Error = err.Error()
+			}
+		}
+	}
+	if status.Message == "" && status.Error == "" {
+		status.Message = "BBR status collected"
+	}
+	return status
 }
 
 func runShell(command string) (string, error) {

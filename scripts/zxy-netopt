@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BBR_CONF="${ZXY_BBR_CONF:-/etc/sysctl.d/99-zxy-bbr.conf}"
+BBR_DISABLED_MARKER="${ZXY_BBR_DISABLED_MARKER:-/etc/zxy-panel/bbr.disabled}"
+JSON_OUTPUT=false
+
+if [[ "${1:-}" == "--json" ]]; then
+  JSON_OUTPUT=true
+  shift
+fi
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "zxy-netopt must run as root" >&2
+  exit 1
+fi
+
+read_sysctl() {
+  sysctl -n "$1" 2>/dev/null || true
+}
+
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\\\n/g'
+}
+
+emit_status() {
+  local message="${1:-}"
+  local kernel congestion qdisc available module_loaded supported enabled
+
+  kernel="$(uname -r 2>/dev/null || true)"
+  congestion="$(read_sysctl net.ipv4.tcp_congestion_control)"
+  qdisc="$(read_sysctl net.core.default_qdisc)"
+  available="$(read_sysctl net.ipv4.tcp_available_congestion_control)"
+  module_loaded=false
+  supported=false
+  enabled=false
+
+  if command -v lsmod >/dev/null 2>&1 && lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
+    module_loaded=true
+  fi
+  if printf '%s\n' "$available" | grep -qw bbr; then
+    supported=true
+  fi
+  if [[ "$congestion" == "bbr" && "$qdisc" == "fq" ]]; then
+    enabled=true
+  fi
+
+  if [[ "$JSON_OUTPUT" == true ]]; then
+    local item first=true
+    printf '{"kernel":"%s","supported":%s,"enabled":%s,"congestion_control":"%s","default_qdisc":"%s","available_congestion_control":[' \
+      "$(json_escape "$kernel")" "$supported" "$enabled" "$(json_escape "$congestion")" "$(json_escape "$qdisc")"
+    for item in $available; do
+      if [[ "$first" != true ]]; then
+        printf ','
+      fi
+      printf '"%s"' "$(json_escape "$item")"
+      first=false
+    done
+    printf '],"module_loaded":%s,"message":"%s"}\n' "$module_loaded" "$(json_escape "$message")"
+    return
+  fi
+
+  printf 'Kernel: %s\n' "$kernel"
+  printf 'Supported: %s\n' "$supported"
+  printf 'Enabled: %s\n' "$enabled"
+  printf 'Congestion control: %s\n' "$congestion"
+  printf 'Default qdisc: %s\n' "$qdisc"
+  printf 'Available algorithms: %s\n' "$available"
+  printf 'tcp_bbr module loaded: %s\n' "$module_loaded"
+  [[ -z "$message" ]] || printf 'Message: %s\n' "$message"
+}
+
+enable_bbr() {
+  if [[ "${ZXY_BBR_AUTO_ENABLE:-false}" == true && -f "$BBR_DISABLED_MARKER" ]]; then
+    emit_status "BBR remains disabled by the administrator"
+    return 0
+  fi
+
+  modprobe tcp_bbr >/dev/null 2>&1 || true
+  if ! read_sysctl net.ipv4.tcp_available_congestion_control | tr ' ' '\n' | grep -qx bbr; then
+    emit_status "BBR is not supported by this kernel"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$BBR_CONF")" "$(dirname "$BBR_DISABLED_MARKER")"
+  cat > "$BBR_CONF" <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+  chmod 0644 "$BBR_CONF"
+
+  if ! sysctl --system >/dev/null 2>&1; then
+    emit_status "Failed to apply the ZXY BBR sysctl configuration"
+    return 1
+  fi
+
+  if [[ "$(read_sysctl net.ipv4.tcp_congestion_control)" == bbr && "$(read_sysctl net.core.default_qdisc)" == fq ]]; then
+    rm -f "$BBR_DISABLED_MARKER"
+    emit_status "BBR is enabled"
+    return 0
+  fi
+
+  emit_status "BBR configuration was written but is not active"
+  return 1
+}
+
+disable_bbr() {
+  mkdir -p "$(dirname "$BBR_DISABLED_MARKER")"
+  : > "$BBR_DISABLED_MARKER"
+  chmod 0600 "$BBR_DISABLED_MARKER"
+  rm -f "$BBR_CONF"
+
+  if ! sysctl --system >/dev/null 2>&1; then
+    emit_status "ZXY BBR configuration was removed, but sysctl reload failed"
+    return 1
+  fi
+
+  emit_status "ZXY BBR configuration removed; a reboot may be required to fully restore the previous algorithm"
+}
+
+case "${1:-}" in
+  bbr-status|status)
+    emit_status "BBR status collected"
+    ;;
+  enable-bbr|enable)
+    enable_bbr
+    ;;
+  disable-bbr|disable)
+    disable_bbr
+    ;;
+  *)
+    echo "Usage: zxy-netopt [--json] {bbr-status|enable-bbr|disable-bbr}" >&2
+    exit 1
+    ;;
+esac

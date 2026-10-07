@@ -5,11 +5,11 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 ## 当前版本
 
 - 源码开发版本：`0.7.8-stable-engineering`
-- 开发状态：未发布；保留 BBR、版本治理和 R1/R1.5 护栏，正在验收安装、路由及运维可靠性整改。
-- 最新已发布版本：`0.7.7.5-stability-polish-agent-xray`
-- 发布标签：`v0.7.7.5`
-- 发布时间：`2026-07-03`
-- 发布包：`zxy-panel-v0.7.7.5-stability-polish.zip`
+- 正式发布版本：`0.7.8-stable-engineering`；标签 `v0.7.8`，包名 `zxy-panel-v0.7.8-stable-engineering.zip`。
+- 发布时间：`2026-10-07`；实际下载和 Latest 状态以 GitHub Release 为准，保留 `v0.7.8-test.1` 测试预发布及历史证据。
+- V0.7.8 已验证范围：Ubuntu 22.04、Linux amd64、fast/systemd，升级起点为 V0.7.7.5。
+- Debian 12、Docker、更早版本升级和整机快照回滚未完成本轮真机验收，不扩大兼容承诺。
+- 正式发布计划、验收证据边界和已知问题见 [V0.7.8 发布说明](docs/releases/v0.7.8.md)。
 
 ## 功能列表
 
@@ -31,7 +31,7 @@ ZXY Panel 是一个面向跨境业务网络节点管理的控制台，用于统�
 
 ## 一键安装
 
-以下公开入口读取已发布清单，不会安装尚未发布的本地候选。当前候选仅面向可销毁测试机；目标系统为 Ubuntu 22.04 / Debian 12、Linux amd64、systemd。旧系统、ARM、跨模式迁移及 Docker 外部数据库不在本轮承诺内。真实安装/升级/快照恢复验收尚未完成。
+以下公开入口读取远端 main 的正式清单，V0.7.8 清单指向 `v0.7.8` Release 的原样验收包。V0.7.8 已验证 Ubuntu 22.04、Linux amd64、fast/systemd 的安装、重复安装、配置恢复和升级；Debian/Docker 及整机快照回滚尚未验收。旧系统、ARM、跨模式迁移及 Docker 外部数据库不在本轮已验证范围内。
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/zoow1388-svg/zxy-panel/main/install.sh)
@@ -72,7 +72,16 @@ zxy-panel update
 zxy-panel uninstall
 ```
 
-## V0.7.7.5 发布说明
+## V0.7.8 发布说明
+
+- 保留 BBR、版本治理及 R1/R1.5 Server、Node、Relay、Client 绑定护栏和保存失败保护。
+- 完善 Node/Relay 错误提示及保存状态，避免重复提交和草稿丢失。
+- 修正 systemd 服务路径和严格 Xray drop-in 归属检查，支持已验收的重复安装和配置/数据恢复。
+- Ubuntu 22.04 amd64 fast/systemd 的 V0.7.7.5 手动升级、后台托管升级、旧数据保留、原客户端联网、重启恢复及 300 秒空闲观察通过。
+- 原样使用已验收 ZIP，不重建二进制、前端或安装包。当前源码的发布文档更新不在该 ZIP 内，完整差异在包外说明中列明。
+- BBR 安装日志可能误提示未开启；网络波动原因未确认。完整限制与证据边界见 [发布说明](docs/releases/v0.7.8.md)。
+
+## V0.7.7.5 历史发布说明
 
 V0.7.7.5 是基于 V0.7.7.4 的稳定性收尾版本，不增加高风险新功能，重点处理测试过程中反复出现的发布一致性、客户端导入误判和安装自检提示问题：
 
@@ -116,13 +125,16 @@ Clash Verge 首页显示的“来源：服务器IP:面板端口”是订阅源�
 
 ## 发布一致性说明
 
-`VERSION` 是源码版本基准。`version.json` 是一键安装和一键升级读取的发布清单，在新包正式发布前可以低于源码开发版本。现有发布清单保持以下字段：
+`VERSION` 是源码版本基准。`version.json` 是一键安装和一键升级读取的发布清单。V0.7.8 的清单、运行版本与已验收包 SHA256 一致；只有正式附件下载核验通过后才投放 main 清单。
 
-- `latest`: `0.7.7.5-stability-polish-agent-xray`
-- `version`: `0.7.7.5`
-- `codename`: `stability-polish`
-- `package`: `zxy-panel-v0.7.7.5-stability-polish.zip`
-- `tag`: `v0.7.7.5`
+以下为正式清单元数据；最低声明升级起点为本轮实际验收的 V0.7.7.5。该字段不是客户端强制升级门槛，不代表更早版本兼容性已通过：
+
+- 最新已发布版本：`0.7.8-stable-engineering`
+- `latest`: `0.7.8-stable-engineering`
+- `version`: `0.7.8`
+- `codename`: `stable-engineering`
+- `package`: `zxy-panel-v0.7.8-stable-engineering.zip`
+- `tag`: `v0.7.8`
 
 开发状态检查（默认模式）允许发布清单落后于源码，仍会校验清单自身的版本、包名和下载地址是否一致：
 
@@ -133,7 +145,7 @@ node scripts/check-version-consistency.mjs --mode dev
 发布检查要求清单与源码版本完全一致，并校验实际 ZIP 的 SHA256：
 
 ```bash
-node scripts/check-version-consistency.mjs --mode release --manifest dist-release/version.fast.json --package dist-release/zxy-panel-v0.7.8-stable-engineering.zip
+node scripts/check-version-consistency.mjs --mode release --manifest version.json --package /absolute/path/to/zxy-panel-v0.7.8-stable-engineering.zip
 ```
 
 构建脚本默认读取 `VERSION`，显式版本参数必须与源码相符。历史 CHANGELOG、旧发布目录、持久化版本元数据和未重新构建的产物不属于源码版本检查范围。发布检查不能代替服务器安装、Agent 或 Xray 功能验收。

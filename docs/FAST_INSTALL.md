@@ -2,9 +2,10 @@
 
 ## 范围与状态
 
-源码 `0.7.8-stable-engineering`，候选未发布，尚缺可销毁测试机的安装/升级/完整快照验收。
-目标为 Ubuntu 22.04 / Debian 12、Linux amd64、systemd。旧系统、ARM 和容器内冒充宿主机不在本轮范围。
-公开一键安装读取正式清单，不安装本地候选；隔离通过不构成安装耗时承诺。
+源码及正式清单版本为 `0.7.8-stable-engineering`，正式标签 `v0.7.8`；保留测试预发布 `v0.7.8-test.1`。实际公开下载与 Latest 状态以 GitHub Release 为准。
+已通过真机验收：Ubuntu 22.04、Linux amd64、fast/systemd 的新安装、重复安装、配置/数据恢复、V0.7.7.5 手动和后台托管升级、原客户端联网、重启恢复与 300 秒空闲观察。
+Debian 12 是原设计目标，但本轮尚未真机验收；Docker、完整快照恢复和更早升级起点同样未验证。旧系统、ARM 和容器内冒充宿主机不在本轮范围。
+公开一键安装读取远端正式清单。实际测试耗时不构成其它线路或服务器的速度承诺。详见 [V0.7.8 发布说明](releases/v0.7.8.md)。
 
 ## 产物与服务
 
@@ -25,7 +26,8 @@ bash scripts/build-fast-release.sh 0.7.8 stable-engineering
 ```
 
 读取 VERSION 并拒绝版本不一致，构建 Linux amd64 API/Agent 和前端，生成 ZIP/SHA256/外部 version.fast.json 模板。
-冻结 frontend/dist 不代表新源码产物，必须核对生成资产和源码提交。正式 download_url/SHA256 仅在发布获批后更新。
+冻结 frontend/dist 不代表新源码产物，必须核对生成资产和源码提交。此次复用已有 64 场景浏览器验收对应的 HTML/JS/CSS 和已验证二进制，包内哈希与来源清单一致；未重新构建。
+version.json 使用正式 v0.7.8 的 download_url 和原包 SHA256；发布流程必须先下载核验附件，再投放 main 清单。不要仅凭本地清单内容假定远端下载可用。
 
 ## 测试机安装
 
@@ -43,6 +45,8 @@ FRESH_INSTALL=true 会清理经过匹配备份验证的正式 DB，并受既有 
 
 ## Docker 兼容入口
 
+以下保留既有兼容机制说明，不表示 Docker 已通过本轮真机验收，也不是 fast 与 Docker 互相迁移的授权。
+
 ```bash
 ZXY_INSTALL_MODE=docker bash deploy/install.sh
 ```
@@ -52,3 +56,9 @@ ZXY_INSTALL_MODE=docker bash deploy/install.sh
 Docker 配置/数据恢复另要求 Compose 能输出 JSON 配置并支持 `up --pull never`；缺少能力时拒绝恢复，不代表不能使用原安装入口。
 安装完成前须确认 API health JSON 的 service/status/version 和 doctor。PASS 不代替 Agent/Xray/客户联网、完整绑定核验或回滚。
 失败必须非零并保留恢复证据。升级、配置/数据恢复与整版回滚见 [UPGRADE.md](UPGRADE.md)。
+
+## 已知问题
+
+- BBR JSON 实际为 `"enabled":true` 时，安装器因按带空格文本匹配，可能显示“未支持或仍未开启”。测试输出显示实际内核为 bbr/fq；不能用错误文案判断真实状态。此次不修改安装器或测试包。
+- 有过客户端网络波动报告；已检查入口监听和服务状态，原因仍未确认，不宣称与升级有关或无关。
+- 移动端 Relay 表格溢出、Token 重置及跨进程写入边界等既有问题不在本轮整改范围。
